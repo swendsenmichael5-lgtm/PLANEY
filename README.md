@@ -1,70 +1,75 @@
 # PLANEY ✈️🩴🔪
 
-A first-person multiplayer social deduction game set on a packed passenger jet.
-Everyone on board is wearing sandals. One player — **the Evil** — has a knife
-hidden in theirs, and wants to reach the cockpit. Everyone else has to figure
-out who it is before that happens.
+A first-person, **pixelated**, multiplayer social deduction game set on a packed
+passenger jet. Everyone on board is wearing sandals. One player — **the Evil** —
+has a knife hidden in theirs, and wants to reach the cockpit. Everyone else has
+to figure out who it is before that happens.
 
-## Run it
+**No install, no server.** The game is a static page with peer-to-peer WebRTC
+multiplayer (Trystero): one player creates a flight, gets a 4-letter code and a
+share link, and friends join straight from their browsers. The flight creator's
+browser acts as the game authority.
 
-```bash
-npm install
-npm start
-# open http://localhost:3000 in several browser tabs / machines
-```
-
-The first player to board is the host and presses **Take off**. One player is
-secretly assigned the Evil role each round.
+▶ **Play:** see the link in the latest release/PR, or serve `public/` from any
+static host. For local play: `npm install && npm start` → http://localhost:3000
 
 ## How a round works
 
-- The plane has 18 rows of seats full of NPC passengers, plus two flight
-  attendants (Brenda and Doug) pushing drink carts up and down the aisle,
-  offering peanuts and Coke. Players start seated in their assigned seats.
-- The **Evil** must walk the full length of the aisle, stand at the cockpit
-  door and **hold E for ~9 seconds** to pick the lock, then step inside and
-  press **Q** to pull the knife from their sandal. That's the Evil win.
-- The **crew** wins by finding the knife: walk up to a *standing* player and
-  press **F** to inspect their sandals (takes 2.5s, you can't move). If you
-  find the knife, crew wins instantly.
-- If the 8-minute flight timer runs out, the plane lands and the **crew wins**.
+- 18 rows of seats full of NPC passengers, plus flight attendants Brenda and
+  Doug pushing drink carts up and down the aisle offering peanuts and Coke.
+- The **Evil** must reach the cockpit door, **hold E / A for ~9s** to pick the
+  lock, step inside, and press **Q / RB** to pull the knife. Evil wins.
+- The **crew** wins by finding the knife: inspect a standing player's sandals
+  (**F / X**, takes 2.5s) — or by surviving until the plane lands (8 min).
+
+## The restraint mechanic
+
+- Press **R / B** next to a standing player to tackle them and zip-tie them
+  with seatbelt extenders. They're pinned to the floor for **15 seconds** —
+  and restrained players **can't pull their feet away**, so they can be
+  inspected at leisure. Restrain + inspect is the crew's power play.
+- After any restrain attempt you have a **30-second cooldown**.
+- **Every tackle causes a cabin-wide COMMOTION (12s):** if you grabbed the
+  wrong person, the Evil's window is open — the lock picks **2.5× faster**
+  and the door rattle and knife clinks are drowned out by the shouting.
+  Tackle carelessly and you may hand the Evil the cockpit.
 
 ## Why it's hard to be the Evil
 
-| Pressure on the Evil | Mechanic |
+| Pressure | Mechanic |
 |---|---|
-| The walk is exposed | The cockpit is at the far end of a single aisle — anyone looking forward sees who's loitering at the door |
-| The lock is slow & loud | 9 seconds of picking, the door handle visibly rattles and thuds every second, and progress decays if you stop |
-| Hurrying is risky | Sprinting randomly makes the hidden knife *clink* — everyone is told which row the sound came from |
-| Innocents can clear themselves | Press **G** to voluntarily show clean sandals (the Evil can never do this — it reveals the knife and loses instantly) |
-| Refusal is a tell | Pulling your feet away from an inspection cancels it and is announced to everyone |
-| Carts block the aisle | The attendants' drink carts physically block the aisle, forcing awkward waits in plain view |
-| The clock | The Evil *must* act before landing; pure hiding loses |
+| The walk is exposed | One long aisle, cockpit at the far end — everyone sees who loiters at the door |
+| The lock is slow & loud | ~9s of picking, the handle rattles for the whole cabin, progress decays when you stop |
+| Hurrying is risky | Sprinting can make the hidden knife *clink*, announced by row |
+| Innocents can clear themselves | **G / Y** shows clean sandals — the Evil showing theirs loses instantly |
+| Refusal is a tell | Pulling feet away from an inspection is broadcast to everyone |
+| Restraints | Get tackled near the door and you're a sitting duck for an inspection |
+| Carts block the aisle | The attendants' carts physically jam the aisle |
+| The clock | Landing = crew win, so pure hiding loses |
 
-## Why it's still fair for the Evil
-
-- Inspections cost: each player gets **one** inspection, and a wrong guess
-  stuns you for 8 seconds while you apologize, broadcast to the whole cabin.
-- Seated players can't be inspected — feet tucked under the seat — so the
-  Evil can sit and blend in between moves.
-- Lockpick progress only partially decays, so the Evil can chip away at the
-  lock across several casual "trips to the bathroom".
-- Everyone looks the same: sandals on every passenger, NPC decoys everywhere.
+…and why it's still fair: one inspection per player (a wrong one stuns you for
+8s of public apologizing), seated feet can't be inspected, restrains cost a
+cooldown and gift the Evil a commotion, and lockpick progress persists across
+casual "trips to the bathroom".
 
 ## Controls
 
-| Key | Action |
-|---|---|
-| WASD + mouse | Move / look (click to lock pointer) |
-| Shift | Hurry (risky if you have a knife in your sandal) |
-| E | Sit / stand · hold at cockpit door to try the lock |
-| F | Inspect nearest standing player's sandals |
-| G | Show everyone your sandals |
-| Q | Pull the knife (cockpit only, Evil only) |
-| Enter | Cabin chat — accuse, deflect, lie |
+| Keyboard / mouse | Xbox controller | Action |
+|---|---|---|
+| WASD + mouse | Left stick / Right stick | Move / look |
+| Shift | LT or click left stick | Hurry (risky with a knife in your sandal) |
+| E | A | Sit / stand · hold at cockpit door to pick the lock |
+| F | X | Inspect nearest standing player's sandals |
+| R | B | Restrain (tackle + zip-tie) |
+| G | Y | Show everyone your sandals |
+| Q | RB | Pull the knife (cockpit only, Evil only) |
+| Enter | — | Cabin chat |
+| — | Start | Take off (host, in lobby) |
 
 ## Stack
 
-Node.js + Express + Socket.IO server (`server/index.js`) with an
-authoritative game loop; Three.js first-person client (`public/game.js`).
-No build step.
+Three.js first-person client rendered at ¼ resolution with nearest-neighbor
+upscaling for the pixel look (`public/game.js`), host-authoritative game logic
+running in the room creator's browser (`public/logic.js`), Trystero
+(nostr-signaled WebRTC) for serverless multiplayer (`public/vendor/`).
+All dependencies are vendored — no CDNs, no build step, works from any static file host.

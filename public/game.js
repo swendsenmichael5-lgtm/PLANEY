@@ -1,18 +1,17 @@
 import * as THREE from 'three';
+import { joinRoom, selfId } from './vendor/trystero-nostr.js';
+import { HostLogic, C } from './logic.js';
 
 // ===========================================================================
-// Constants (must match server/index.js)
+// Constants
 // ===========================================================================
 const ROWS = 18;
 const rowZ = (r) => -20 + r * 2.2;
 const SEAT_XS = [-2.2, -1.5, -0.8, 0.8, 1.5, 2.2];
-const CABIN_FRONT = -24;       // cockpit door plane
-const CABIN_BACK = 20.5;       // galley wall
-const COCKPIT_BACK = -28;
-const DOOR_ZONE = { z: -23.0, radius: 1.6 };
+const CABIN_FRONT = -24, CABIN_BACK = 20.5, COCKPIT_BACK = -28;
 const EYE = 1.55, EYE_SEATED = 1.05;
 const WALK = 2.3, SPRINT = 4.2, RADIUS = 0.32;
-const INSPECT_RANGE = 2.2;
+const PIXEL = 4; // render at 1/4 resolution for chunky pixels
 
 // ===========================================================================
 // HUD helpers
@@ -34,13 +33,12 @@ const setProgress = (label, frac) => {
   $('progressBar').style.width = `${Math.round(frac * 100)}%`;
 };
 
-// Tiny WebAudio blips so clinks and rattles are audible
 let actx;
 function blip(freq, dur = 0.08, gain = 0.15) {
   try {
     actx = actx || new AudioContext();
     const o = actx.createOscillator(), g = actx.createGain();
-    o.frequency.value = freq; o.type = 'triangle';
+    o.frequency.value = freq; o.type = 'square';
     g.gain.setValueAtTime(gain, actx.currentTime);
     g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + dur);
     o.connect(g).connect(actx.destination);
@@ -49,70 +47,63 @@ function blip(freq, dur = 0.08, gain = 0.15) {
 }
 
 // ===========================================================================
-// Scene
+// Renderer — low internal resolution, upscaled with nearest-neighbor
 // ===========================================================================
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0e16);
 const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 120);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-document.body.appendChild(renderer.domElement);
-addEventListener('resize', () => {
+const renderer = new THREE.WebGLRenderer({ canvas: $('game'), antialias: false });
+renderer.setPixelRatio(1);
+function resize() {
+  renderer.setSize(Math.max(2, Math.floor(innerWidth / PIXEL)), Math.max(2, Math.floor(innerHeight / PIXEL)), false);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
+}
+resize();
+addEventListener('resize', resize);
 
 scene.add(new THREE.HemisphereLight(0xeef3ff, 0x30343f, 1.0));
 const sun = new THREE.DirectionalLight(0xfff3df, 0.5);
 sun.position.set(3, 6, 2);
 scene.add(sun);
 
-const colliders = []; // {minX,maxX,minZ,maxZ}
+const colliders = [];
 const box = (minX, maxX, minZ, maxZ) => colliders.push({ minX, maxX, minZ, maxZ });
 
-// ---- Fuselage -------------------------------------------------------------
+// ---- Fuselage ---------------------------------------------------------------
 {
   const len = CABIN_BACK - COCKPIT_BACK + 4;
   const tube = new THREE.Mesh(
-    new THREE.CylinderGeometry(3.2, 3.2, len, 28, 1, true),
-    new THREE.MeshStandardMaterial({ color: 0xd8dde6, side: THREE.BackSide, roughness: 0.9 })
+    new THREE.CylinderGeometry(3.2, 3.2, len, 14, 1, true),
+    new THREE.MeshStandardMaterial({ color: 0xd8dde6, side: THREE.BackSide, roughness: 0.9, flatShading: true })
   );
   tube.rotation.x = Math.PI / 2;
   tube.position.set(0, 1.2, (CABIN_BACK + COCKPIT_BACK) / 2);
   scene.add(tube);
 
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(5.6, len),
-    new THREE.MeshStandardMaterial({ color: 0x2e3340, roughness: 0.95 })
-  );
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(5.6, len),
+    new THREE.MeshStandardMaterial({ color: 0x2e3340, roughness: 0.95 }));
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(0, 0.001, (CABIN_BACK + COCKPIT_BACK) / 2);
   scene.add(floor);
 
-  // Aisle carpet
-  const carpet = new THREE.Mesh(
-    new THREE.PlaneGeometry(1.0, CABIN_BACK - CABIN_FRONT),
-    new THREE.MeshStandardMaterial({ color: 0x44506e, roughness: 1 })
-  );
+  const carpet = new THREE.Mesh(new THREE.PlaneGeometry(1.0, CABIN_BACK - CABIN_FRONT),
+    new THREE.MeshStandardMaterial({ color: 0x44506e, roughness: 1 }));
   carpet.rotation.x = -Math.PI / 2;
   carpet.position.set(0, 0.005, (CABIN_BACK + CABIN_FRONT) / 2);
   scene.add(carpet);
 
-  // Windows + overhead bins + cabin lights
   const winMat = new THREE.MeshBasicMaterial({ color: 0x87b8e8 });
-  const binMat = new THREE.MeshStandardMaterial({ color: 0xbfc6d2, roughness: 0.7 });
+  const binMat = new THREE.MeshStandardMaterial({ color: 0xbfc6d2, roughness: 0.7, flatShading: true });
   for (const side of [-1, 1]) {
     const bin = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.5, CABIN_BACK - CABIN_FRONT), binMat);
     bin.position.set(side * 1.9, 2.45, (CABIN_BACK + CABIN_FRONT) / 2);
     bin.rotation.z = side * 0.35;
     scene.add(bin);
     for (let r = 0; r < ROWS; r++) {
-      const w = new THREE.Mesh(new THREE.CircleGeometry(0.18, 12), winMat);
+      const w = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.45), winMat);
       w.position.set(side * 2.92, 1.55, rowZ(r));
       w.rotation.y = side * -Math.PI / 2;
-      w.scale.y = 1.4;
       scene.add(w);
     }
   }
@@ -124,7 +115,6 @@ const box = (minX, maxX, minZ, maxZ) => colliders.push({ minX, maxX, minZ, maxZ 
     scene.add(s);
   }
 
-  // Rear galley wall + front bulkhead around the door
   const wallMat = new THREE.MeshStandardMaterial({ color: 0xcdd3dd });
   const back = new THREE.Mesh(new THREE.BoxGeometry(6.4, 3.4, 0.2), wallMat);
   back.position.set(0, 1.5, CABIN_BACK + 0.1);
@@ -136,18 +126,19 @@ const box = (minX, maxX, minZ, maxZ) => colliders.push({ minX, maxX, minZ, maxZ 
     scene.add(bh);
     box(side === -1 ? -3.2 : 0.55, side === -1 ? -0.55 : 3.2, CABIN_FRONT - 0.15, CABIN_FRONT + 0.15);
   }
-  // EXIT sign over the door
-  const cnv = document.createElement('canvas'); cnv.width = 256; cnv.height = 64;
+  const cnv = document.createElement('canvas'); cnv.width = 128; cnv.height = 32;
   const c2 = cnv.getContext('2d');
-  c2.fillStyle = '#13315c'; c2.fillRect(0, 0, 256, 64);
-  c2.fillStyle = '#9ce2ff'; c2.font = 'bold 34px sans-serif'; c2.textAlign = 'center';
-  c2.fillText('COCKPIT', 128, 44);
-  const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.3), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(cnv) }));
+  c2.fillStyle = '#13315c'; c2.fillRect(0, 0, 128, 32);
+  c2.fillStyle = '#9ce2ff'; c2.font = 'bold 18px monospace'; c2.textAlign = 'center';
+  c2.fillText('COCKPIT', 64, 23);
+  const signTex = new THREE.CanvasTexture(cnv);
+  signTex.magFilter = signTex.minFilter = THREE.NearestFilter;
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.3), new THREE.MeshBasicMaterial({ map: signTex }));
   sign.position.set(0, 2.55, CABIN_FRONT + 0.02);
   scene.add(sign);
 }
 
-// ---- Cockpit (behind the door) ---------------------------------------------
+// ---- Cockpit ------------------------------------------------------------------
 {
   const dash = new THREE.Mesh(new THREE.BoxGeometry(4, 1, 1), new THREE.MeshStandardMaterial({ color: 0x222833 }));
   dash.position.set(0, 0.9, COCKPIT_BACK + 0.7);
@@ -166,13 +157,12 @@ const box = (minX, maxX, minZ, maxZ) => colliders.push({ minX, maxX, minZ, maxZ 
     scene.add(s);
     box(x - 0.35, x + 0.35, COCKPIT_BACK + 1.65, COCKPIT_BACK + 2.35);
   }
-  // windshield
   const ws = new THREE.Mesh(new THREE.PlaneGeometry(4.5, 1.4), new THREE.MeshBasicMaterial({ color: 0x0c1f3d }));
   ws.position.set(0, 1.9, COCKPIT_BACK + 0.05);
   scene.add(ws);
 }
 
-// ---- Cockpit door (collider removed when opened) ----------------------------
+// ---- Cockpit door ---------------------------------------------------------------
 const doorGroup = new THREE.Group();
 const doorMesh = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.5, 0.12),
   new THREE.MeshStandardMaterial({ color: 0x9aa3b0, roughness: 0.5 }));
@@ -190,55 +180,60 @@ function openDoor() {
   doorOpen = true;
   const i = colliders.indexOf(doorCollider);
   if (i >= 0) colliders.splice(i, 1);
-  doorGroup.rotation.y = -1.9; // swings into the cockpit
+  doorGroup.rotation.y = -1.9;
   doorGroup.position.x = -0.55;
 }
+function closeDoor() {
+  doorOpen = false;
+  doorGroup.rotation.y = 0;
+  doorGroup.position.x = 0;
+  if (!colliders.includes(doorCollider)) colliders.push(doorCollider);
+}
 
-// ---- Seats ------------------------------------------------------------------
+// ---- Seats --------------------------------------------------------------------
 const seatGeoBase = new THREE.BoxGeometry(0.62, 0.45, 0.6);
 const seatGeoBack = new THREE.BoxGeometry(0.62, 0.85, 0.16);
-const seatMat = new THREE.MeshStandardMaterial({ color: 0x27497a, roughness: 0.9 });
-const seatMatAlt = new THREE.MeshStandardMaterial({ color: 0x2d5a8e, roughness: 0.9 });
+const seatMatA = new THREE.MeshStandardMaterial({ color: 0x27497a, roughness: 0.9 });
+const seatMatB = new THREE.MeshStandardMaterial({ color: 0x2d5a8e, roughness: 0.9 });
 for (let r = 0; r < ROWS; r++) {
   for (const x of SEAT_XS) {
-    const m = (r + SEAT_XS.indexOf(x)) % 2 ? seatMat : seatMatAlt;
+    const m = (r + SEAT_XS.indexOf(x)) % 2 ? seatMatA : seatMatB;
     const base = new THREE.Mesh(seatGeoBase, m);
     base.position.set(x, 0.28, rowZ(r));
     const bk = new THREE.Mesh(seatGeoBack, m);
     bk.position.set(x, 0.85, rowZ(r) + 0.28);
     scene.add(base, bk);
   }
-  // one collider per seat bank per row (players walk the aisle + row gaps)
   box(-2.55, -0.5, rowZ(r) - 0.32, rowZ(r) + 0.38);
   box(0.5, 2.55, rowZ(r) - 0.32, rowZ(r) + 0.38);
 }
 
 // ===========================================================================
-// People builders
+// People
 // ===========================================================================
-function makeNameTag(text, color = '#fff') {
-  const cnv = document.createElement('canvas'); cnv.width = 256; cnv.height = 64;
+function tagSprite(text, color = '#fff', w = 1.7, h = 0.42) {
+  const cnv = document.createElement('canvas'); cnv.width = 128; cnv.height = 32;
   const c = cnv.getContext('2d');
-  c.font = 'bold 30px sans-serif'; c.textAlign = 'center';
-  c.fillStyle = 'rgba(0,0,0,0.45)';
-  const w = c.measureText(text).width + 24;
-  c.beginPath(); c.roundRect(128 - w / 2, 10, w, 44, 10); c.fill();
-  c.fillStyle = color; c.fillText(text, 128, 42);
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cnv), depthTest: false }));
-  sp.scale.set(1.7, 0.42, 1);
+  c.font = 'bold 16px monospace'; c.textAlign = 'center';
+  c.fillStyle = 'rgba(0,0,0,0.5)';
+  c.fillRect(64 - Math.min(60, c.measureText(text).width / 2 + 8), 4, Math.min(120, c.measureText(text).width + 16), 24);
+  c.fillStyle = color; c.fillText(text, 64, 21);
+  const tex = new THREE.CanvasTexture(cnv);
+  tex.magFilter = tex.minFilter = THREE.NearestFilter;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+  sp.scale.set(w, h, 1);
   return sp;
 }
 
-function makePerson(color, name, opts = {}) {
+function makePerson(color, name) {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.55, 4, 10),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.85 }));
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.85, 0.26),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.85, flatShading: true }));
   body.position.y = 0.85;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 10),
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3),
     new THREE.MeshStandardMaterial({ color: 0xe8b990, roughness: 0.9 }));
-  head.position.y = 1.42;
+  head.position.y = 1.45;
   g.add(body, head);
-  // Everyone wears sandals.
   const sandalMat = new THREE.MeshStandardMaterial({ color: 0x7a5230, roughness: 1 });
   for (const sx of [-0.11, 0.11]) {
     const s = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.05, 0.3), sandalMat);
@@ -246,17 +241,18 @@ function makePerson(color, name, opts = {}) {
     g.add(s);
   }
   if (name) {
-    const tag = makeNameTag(name);
-    tag.position.y = 1.85;
+    const tag = tagSprite(name);
+    tag.position.y = 1.9;
     g.add(tag);
   }
-  // Badge shown after sandals are verified clean
-  const badge = makeNameTag('🩴 clean', '#7dffa8');
-  badge.scale.set(1.1, 0.3, 1);
-  badge.position.y = 2.12;
+  const badge = tagSprite('CLEAN', '#7dffa8', 1.0, 0.28);
+  badge.position.y = 2.16;
   badge.visible = false;
-  g.add(badge);
-  g.userData = { body, head, badge, seatedPose: false };
+  const cuff = tagSprite('RESTRAINED', '#ff7a7a', 1.4, 0.3);
+  cuff.position.y = 1.0;
+  cuff.visible = false;
+  g.add(badge, cuff);
+  g.userData = { body, head, badge, cuff, seatedPose: false };
   return g;
 }
 
@@ -264,11 +260,11 @@ function setPose(g, seated) {
   if (g.userData.seatedPose === seated) return;
   g.userData.seatedPose = seated;
   g.userData.body.position.y = seated ? 0.55 : 0.85;
-  g.userData.head.position.y = seated ? 1.1 : 1.42;
+  g.userData.head.position.y = seated ? 1.12 : 1.45;
   g.userData.body.scale.y = seated ? 0.72 : 1;
 }
 
-// ---- NPC passengers (decoys — outer & inner seats; players get the ±1.5 seats)
+// NPC decoys in the window/inner seats (players get the ±1.5 seats)
 const NPC_COLORS = [0x8d6e63, 0x78909c, 0x6d8b74, 0xa1887f, 0x607d8b, 0x9575cd, 0xbcaaa4, 0x4db6ac];
 const NPC_NAMES = ['Gary', 'Linda', 'Trevor', 'Pam', 'Dale', 'Ruth', 'Kevin', 'Marge', 'Stan', 'Carol', 'Bert', 'Nadine'];
 let npcSeed = 0;
@@ -278,17 +274,17 @@ for (let r = 0; r < ROWS; r++) {
       const npc = makePerson(NPC_COLORS[npcSeed % NPC_COLORS.length], NPC_NAMES[npcSeed % NPC_NAMES.length]);
       npcSeed++;
       npc.position.set(x, 0, rowZ(r));
-      npc.rotation.y = Math.PI; // face forward (toward -z)
+      npc.rotation.y = Math.PI;
       setPose(npc, true);
       scene.add(npc);
     }
   }
 }
 
-// ---- Flight attendants with carts -------------------------------------------
+// Flight attendants + carts
 const attendantObjs = [];
 for (const name of ['Brenda', 'Doug']) {
-  const g = makePerson(0xf2f4f7, name + ' ✈');
+  const g = makePerson(0xf2f4f7, name);
   scene.add(g);
   const cart = new THREE.Group();
   const cbody = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.9, 0.85),
@@ -296,7 +292,7 @@ for (const name of ['Brenda', 'Doug']) {
   cbody.position.y = 0.45;
   cart.add(cbody);
   for (let i = 0; i < 5; i++) {
-    const can = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.12, 8),
+    const can = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.12, 0.09),
       new THREE.MeshStandardMaterial({ color: i % 2 ? 0xd22b2b : 0x2bd96a }));
     can.position.set((i % 3 - 1) * 0.15, 0.96, (Math.floor(i / 3) - 0.5) * 0.3);
     cart.add(can);
@@ -312,20 +308,107 @@ for (const name of ['Brenda', 'Doug']) {
 }
 
 // ===========================================================================
-// Networking + player state
+// Networking — P2P via Trystero; the flight's creator is the authority
 // ===========================================================================
-const socket = io();
-let myId = null, isEvil = false, phase = 'lobby', hostId = null, endsAt = 0;
-let mySeat = null, seated = true, stunnedUntil = 0;
-const remotes = new Map();   // id -> {g, name, target:{pos,ry,seated}, shownUntil}
-const playerInfo = new Map(); // id -> {name, color}
-
-const me = { x: 0, z: 0, ry: 0 };
+const myId = selfId;
+let room = null, sendC2H = null, sendH2C = null;
+let isHost = false, logic = null, hostTick = null;
+let hostId = null, phase = 'menu', endsAt = 0;
+let mySeat = null, seated = true;
+let stunnedUntil = 0, restrainedUntil = 0, restrainCooldownUntil = 0;
+let isEvil = false, commotion = false;
+const remotes = new Map();
+const playerInfo = new Map();
+const me = { x: 0, z: 0 };
 let yaw = 0, pitch = 0;
-let inspecting = null;       // {targetId, until}
-let beingInspectedBy = null;
-let lockpicking = false, lockpickProgress = 0;
+let inspecting = null, lockpicking = false, lockpickProgress = 0;
+let joinRetry = null;
 
+function send(msg) {
+  if (isHost) logic.handle(myId, msg);
+  else if (sendC2H) sendC2H(msg);
+}
+
+function connect(code) {
+  const appConfig = { appId: 'planey-sandal-knife-v1' };
+  room = joinRoom(appConfig, code.toUpperCase());
+  const [c2hSend, onC2H] = room.makeAction('c2h');
+  const [h2cSend, onH2C] = room.makeAction('h2c');
+  sendC2H = c2hSend;
+  sendH2C = h2cSend;
+
+  if (isHost) {
+    logic = new HostLogic(myId, (target, msg) => {
+      if (target === null) { onMsg(msg); sendH2C(msg); }
+      else if (target === myId) onMsg(msg);
+      else sendH2C(msg, target);
+    });
+    onC2H((msg, peerId) => logic.handle(peerId, msg));
+    hostTick = setInterval(() => logic.tick(), C.TICK_MS);
+    room.onPeerLeave((peerId) => logic.removePlayer(peerId));
+    logic.handle(myId, { type: 'join', name: myName });
+  } else {
+    onH2C((msg) => onMsg(msg));
+    room.onPeerLeave((peerId) => {
+      if (peerId === hostId) {
+        alert('The flight host left. Returning to the gate.');
+        location.href = location.pathname;
+      }
+    });
+    // Keep knocking until the host answers with init
+    joinRetry = setInterval(() => send({ type: 'join', name: myName }), 1500);
+    send({ type: 'join', name: myName });
+  }
+}
+
+// ---- Menu ----------------------------------------------------------------------
+let myName = '';
+const params = new URLSearchParams(location.search);
+if (params.get('room')) {
+  $('codeInput').value = params.get('room').toUpperCase().slice(0, 4);
+  $('codeInput').style.display = 'block';
+  $('createBtn').textContent = 'Join this flight';
+}
+function readName() {
+  myName = $('nameInput').value.trim() || 'Passenger';
+  return myName;
+}
+$('createBtn').onclick = () => {
+  readName();
+  let code = params.get('room');
+  if (code) { isHost = false; code = code.toUpperCase().slice(0, 4); }
+  else {
+    isHost = true;
+    code = Array.from({ length: 4 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.floor(Math.random() * 24)]).join('');
+  }
+  enterLobby(code);
+};
+$('joinBtn').onclick = () => {
+  const ci = $('codeInput');
+  if (ci.style.display !== 'block') { ci.style.display = 'block'; ci.focus(); return; }
+  const code = ci.value.trim().toUpperCase();
+  if (code.length !== 4) { $('netStatus').textContent = 'Flight codes are 4 letters.'; return; }
+  readName();
+  isHost = false;
+  enterLobby(code);
+};
+$('codeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('joinBtn').click(); });
+$('nameInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('createBtn').click(); });
+
+function enterLobby(code) {
+  phase = 'lobby';
+  $('menuScreen').style.display = 'none';
+  $('lobbyScreen').style.display = 'flex';
+  $('roomCode').textContent = code;
+  const share = `${location.origin}${location.pathname}?room=${code}`;
+  $('shareLink').value = share;
+  $('copyBtn').onclick = () => { navigator.clipboard?.writeText(share); $('copyBtn').textContent = 'Copied!'; };
+  $('lobbyList').textContent = isHost ? 'Opening the boarding gate...' : 'Contacting the flight host...';
+  connect(code);
+}
+$('startBtn').onclick = () => send({ type: 'start' });
+
+// ---- Remote player avatars --------------------------------------------------------
 function addRemote(p) {
   if (p.id === myId || remotes.has(p.id)) return;
   playerInfo.set(p.id, { name: p.name, color: p.color });
@@ -333,7 +416,7 @@ function addRemote(p) {
   g.position.set(p.pos.x, 0, p.pos.z);
   setPose(g, p.seated);
   scene.add(g);
-  remotes.set(p.id, { g, name: p.name, target: { ...p.pos, ry: p.ry, seated: p.seated }, shownUntil: 0 });
+  remotes.set(p.id, { g, name: p.name, target: { x: p.pos.x, z: p.pos.z, ry: p.ry, seated: p.seated, restrained: false } });
 }
 function removeRemote(id) {
   const r = remotes.get(id);
@@ -341,195 +424,234 @@ function removeRemote(id) {
   playerInfo.delete(id);
 }
 
-// ---- Join / lobby -----------------------------------------------------------
-$('joinBtn').onclick = () => {
-  const name = $('nameInput').value.trim() || 'Passenger';
-  socket.emit('join', { name });
-  $('joinScreen').style.display = 'none';
-  $('lobbyScreen').style.display = 'flex';
-};
-$('nameInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('joinBtn').click(); });
-$('startBtn').onclick = () => socket.emit('startGame');
-
-socket.on('init', (d) => {
-  myId = d.id; phase = d.phase; hostId = d.hostId; endsAt = d.endsAt;
-  mySeat = d.seat;
-  me.x = mySeat.x; me.z = rowZ(mySeat.row);
-  yaw = Math.PI; // face the front of the plane
-  if (d.doorOpen) openDoor();
-  for (const p of d.players) addRemote(p);
-  if (phase === 'playing') enterGame();
-});
-socket.on('lobby', (d) => {
-  hostId = d.hostId;
-  if (phase !== 'lobby' && d.phase === 'lobby') { // round reset
-    phase = 'lobby';
-    $('gameOverScreen').style.display = 'none';
-    $('lobbyScreen').style.display = 'flex';
-    $('roleCard').style.display = 'none';
-    isEvil = false; seated = true;
-    me.x = mySeat.x; me.z = rowZ(mySeat.row);
-    if (doorOpen) { doorOpen = false; doorGroup.rotation.y = 0; doorGroup.position.x = 0; colliders.push(doorCollider); }
-    lockpickProgress = 0; lockpicking = false;
-    setProgress(null);
+// ===========================================================================
+// Message handling (host loopback + network)
+// ===========================================================================
+function onMsg(m) {
+  switch (m.type) {
+    case 'init': {
+      if (joinRetry) { clearInterval(joinRetry); joinRetry = null; }
+      hostId = m.hostId;
+      mySeat = m.seat;
+      me.x = mySeat.x; me.z = rowZ(mySeat.row);
+      yaw = Math.PI;
+      if (m.doorOpen) openDoor();
+      for (const p of m.players) addRemote(p);
+      if (m.phase === 'playing') { phase = 'playing'; endsAt = Date.now() + m.timeLeft; enterGame(); }
+      break;
+    }
+    case 'lobby': {
+      hostId = m.hostId;
+      if (phase === 'playing' || phase === 'over') {
+        phase = 'lobby';
+        $('gameOverScreen').style.display = 'none';
+        $('lobbyScreen').style.display = 'flex';
+        $('roleCard').style.display = 'none';
+        isEvil = false; seated = true; commotion = false;
+        stunnedUntil = restrainedUntil = restrainCooldownUntil = 0;
+        $('stunOverlay').style.display = 'none';
+        if (mySeat) { me.x = mySeat.x; me.z = rowZ(mySeat.row); }
+        closeDoor();
+        lockpickProgress = 0; lockpicking = false;
+        setProgress(null);
+        document.exitPointerLock();
+      }
+      $('lobbyList').innerHTML = m.players.map(p =>
+        `<span style="color:#${p.color.toString(16).padStart(6, '0')}">■</span> ${p.name}${p.id === m.hostId ? ' (host)' : ''}`
+      ).join('<br>');
+      const amHost = myId === m.hostId;
+      $('startBtn').style.display = amHost ? 'block' : 'none';
+      $('lobbyWait').style.display = amHost ? 'none' : 'block';
+      break;
+    }
+    case 'joined': addRemote(m.p); if (phase !== 'menu') feed(`${m.p.name} boarded the plane.`); break;
+    case 'left': removeRemote(m.id); break;
+    case 'role': {
+      isEvil = m.evil;
+      const rc = $('roleCard');
+      rc.style.display = 'block';
+      rc.className = m.evil ? 'evil' : 'crew';
+      rc.innerHTML = m.evil
+        ? '🔪 YOU ARE THE EVIL — knife in your sandal. Open the cockpit door (hold E / A), get in, pull the knife (Q / RB).'
+        : '🩴 PASSENGER — someone has a knife in their sandal. Inspect (F / X) or restrain (R / B) before they reach the cockpit.';
+      break;
+    }
+    case 'started': {
+      endsAt = Date.now() + m.timeLeft;
+      phase = 'playing';
+      seated = true; commotion = false;
+      stunnedUntil = restrainedUntil = restrainCooldownUntil = 0;
+      me.x = mySeat.x; me.z = rowZ(mySeat.row);
+      closeDoor();
+      lockpickProgress = 0; lockpicking = false;
+      for (const p of m.players) {
+        const r = remotes.get(p.id);
+        if (r) {
+          r.target = { x: p.pos.x, z: p.pos.z, ry: p.ry, seated: true, restrained: false };
+          setPose(r.g, true);
+          r.g.userData.badge.visible = false;
+          r.g.userData.cuff.visible = false;
+        }
+      }
+      enterGame();
+      feed('The seatbelt sign is off. Welcome aboard.', 'serve');
+      break;
+    }
+    case 'snap': {
+      for (const p of m.players) {
+        if (p.id === myId) continue;
+        const r = remotes.get(p.id);
+        if (r) r.target = { x: p.pos.x, z: p.pos.z, ry: p.ry, seated: p.seated, restrained: p.restrained };
+      }
+      for (let i = 0; i < m.attendants.length; i++) {
+        attendantObjs[i].z = m.attendants[i].z;
+        attendantObjs[i].dir = m.attendants[i].dir;
+      }
+      if (m.doorOpen && !doorOpen) openDoor();
+      commotion = m.commotion;
+      $('commotion').style.display = commotion && phase === 'playing' ? 'block' : 'none';
+      break;
+    }
+    case 'msg': feed(m.text, m.kind); break;
+    case 'serve': {
+      const row = Math.max(1, Math.round((m.z + 20) / 2.2) + 1);
+      feed(`${m.name} (row ${row}): “${m.text}”`, 'serve');
+      break;
+    }
+    case 'clink': {
+      const row = Math.max(1, Math.round((m.z + 20) / 2.2) + 1);
+      feed(`You hear a faint metallic *clink* near row ${row}...`, 'sus');
+      blip(2200, 0.06, 0.12);
+      break;
+    }
+    case 'rattle': {
+      doorRattleT = 0.5;
+      blip(180, 0.15, 0.1);
+      if (!onMsg._lastRattle || Date.now() - onMsg._lastRattle > 6000) {
+        onMsg._lastRattle = Date.now();
+        feed('The cockpit door handle is rattling...', 'sus');
+      }
+      break;
+    }
+    case 'doorOpened': openDoor(); feed('THE COCKPIT DOOR IS OPEN!', 'alert'); blip(90, 0.4, 0.2); break;
+    case 'lockProg':
+      lockpickProgress = m.progress;
+      if (lockpicking) setProgress('Picking the cockpit lock...', m.progress);
+      break;
+    case 'insStart': {
+      if (m.inspectorId === myId) inspecting = { targetId: m.targetId, until: Date.now() + m.durationMs, durationMs: m.durationMs };
+      if (m.targetId === myId) {
+        const n = playerInfo.get(m.inspectorId)?.name || 'Someone';
+        feed(`${n} is inspecting YOUR sandals! (move to pull away — looks suspicious)`, 'sus');
+      }
+      break;
+    }
+    case 'insCancel': if (m.inspectorId === myId) { inspecting = null; setProgress(null); } break;
+    case 'insResult': {
+      if (m.inspectorId === myId) {
+        inspecting = null; setProgress(null);
+        if (m.clean) {
+          stunnedUntil = Date.now() + m.stunMs;
+          $('stunOverlay').textContent = 'Apologizing profusely...';
+          $('stunOverlay').style.display = 'flex';
+          setTimeout(() => { if (Date.now() >= stunnedUntil) $('stunOverlay').style.display = 'none'; }, m.stunMs);
+        }
+      }
+      const r = remotes.get(m.targetId);
+      if (r && m.clean) r.g.userData.badge.visible = true;
+      break;
+    }
+    case 'restrained': {
+      blip(140, 0.25, 0.2);
+      if (m.id === myId) {
+        restrainedUntil = Date.now() + m.restrainMs;
+        seated = false;
+        $('stunOverlay').textContent = `Zip-tied with seatbelt extenders by ${m.byName}!`;
+        $('stunOverlay').style.display = 'flex';
+        if (inspecting) { inspecting = null; setProgress(null); }
+        if (lockpicking) stopLockpick();
+      }
+      if (m.by === myId) restrainCooldownUntil = Date.now() + m.cooldownMs;
+      const r = remotes.get(m.id);
+      if (r) r.g.userData.cuff.visible = true;
+      break;
+    }
+    case 'released': {
+      if (m.id === myId) { restrainedUntil = 0; $('stunOverlay').style.display = 'none'; }
+      const r = remotes.get(m.id);
+      if (r) r.g.userData.cuff.visible = false;
+      feed(`${m.name} wriggled free of the seatbelt extenders.`);
+      break;
+    }
+    case 'sandals': {
+      feed(`${m.name} shows everyone their sandals. Clean.`);
+      const r = remotes.get(m.id);
+      if (r) r.g.userData.badge.visible = true;
+      break;
+    }
+    case 'knifePulled': blip(60, 0.8, 0.3); break;
+    case 'over': {
+      phase = 'over';
+      document.exitPointerLock();
+      setPrompt(null); setProgress(null);
+      inspecting = null; lockpicking = false;
+      $('stunOverlay').style.display = 'none';
+      $('commotion').style.display = 'none';
+      $('gameOverScreen').style.display = 'flex';
+      const t = $('goTitle');
+      if (m.winner === 'evil') { t.textContent = 'THE EVIL WINS'; t.style.color = '#ff5a5a'; }
+      else { t.textContent = 'CREW WINS'; t.style.color = '#7dffa8'; }
+      $('goReason').textContent = `${m.reason} The Evil was ${m.evilName}.`;
+      break;
+    }
+    case 'chat': {
+      const d = document.createElement('div');
+      d.innerHTML = `<b style="color:#${m.color.toString(16).padStart(6, '0')}">${m.name.replace(/[<>&]/g, '')}:</b> `;
+      d.append(m.text);
+      $('chatLog').appendChild(d);
+      $('chatLog').scrollTop = 1e6;
+      while ($('chatLog').children.length > 30) $('chatLog').firstChild.remove();
+      break;
+    }
   }
-  $('lobbyList').innerHTML = d.players.map(p =>
-    `<span style="color:#${p.color.toString(16).padStart(6, '0')}">●</span> ${p.name}${p.id === d.hostId ? ' (host)' : ''}`
-  ).join('<br>');
-  const amHost = myId === d.hostId;
-  $('startBtn').style.display = amHost ? 'block' : 'none';
-  $('lobbyWait').style.display = amHost ? 'none' : 'block';
-});
-socket.on('playerJoined', (p) => { addRemote(p); feed(`${p.name} boarded the plane.`); });
-socket.on('playerLeft', ({ id }) => removeRemote(id));
+}
 
-socket.on('role', ({ evil }) => {
-  isEvil = evil;
-  const rc = $('roleCard');
-  rc.style.display = 'block';
-  rc.className = evil ? 'evil' : 'crew';
-  rc.innerHTML = evil
-    ? '🔪 YOU ARE THE EVIL — there is a knife in your sandal. Open the cockpit door (hold E), get inside, pull the knife (Q).'
-    : '🩴 PASSENGER — someone on board has a knife in their sandal. Inspect sandals (F) before they reach the cockpit.';
-});
-socket.on('gameStarted', (d) => {
-  endsAt = d.endsAt; phase = 'playing';
-  seated = true;
-  me.x = mySeat.x; me.z = rowZ(mySeat.row);
-  for (const p of d.players) {
-    const r = remotes.get(p.id);
-    if (r) { r.target = { ...p.pos, ry: p.ry, seated: p.seated }; setPose(r.g, true); r.g.userData.badge.visible = false; }
-  }
-  enterGame();
-  feed('The seatbelt sign is off. Welcome aboard.', 'serve');
-});
 function enterGame() {
   $('lobbyScreen').style.display = 'none';
   $('gameOverScreen').style.display = 'none';
   renderer.domElement.requestPointerLock();
 }
 
-socket.on('snap', (d) => {
-  for (const p of d.players) {
-    if (p.id === myId) continue;
-    const r = remotes.get(p.id);
-    if (r) r.target = { x: p.pos.x, z: p.pos.z, ry: p.ry, seated: p.seated };
-  }
-  for (let i = 0; i < d.attendants.length; i++) {
-    const a = attendantObjs[i], s = d.attendants[i];
-    a.z = s.z; a.dir = s.dir;
-  }
-  if (d.doorOpen && !doorOpen) openDoor();
-});
-
-// ---- Game events --------------------------------------------------------------
-socket.on('msg', (m) => feed(m.text, m.kind));
-socket.on('serve', (s) => {
-  const row = Math.max(1, Math.round((s.z + 20) / 2.2) + 1);
-  feed(`${s.name} (row ${row}): “${s.text}”`, 'serve');
-});
-socket.on('clink', (c) => {
-  const row = Math.max(1, Math.round((c.z + 20) / 2.2) + 1);
-  feed(`You hear a faint metallic *clink* near row ${row}...`, 'sus');
-  blip(2200, 0.06, 0.12);
-});
-socket.on('doorRattle', () => {
-  doorRattleT = 0.5;
-  blip(180, 0.15, 0.1);
-  if (!socket._lastRattleFeed || Date.now() - socket._lastRattleFeed > 6000) {
-    socket._lastRattleFeed = Date.now();
-    feed('The cockpit door handle is rattling...', 'sus');
-  }
-});
-socket.on('doorOpened', () => {
-  openDoor();
-  feed('THE COCKPIT DOOR IS OPEN!', 'alert');
-  blip(90, 0.4, 0.2);
-});
-socket.on('lockpickProgress', ({ progress }) => {
-  lockpickProgress = progress;
-  if (lockpicking) setProgress('Picking the cockpit lock...', progress);
-});
-socket.on('inspectStarted', ({ inspectorId, targetId, durationMs }) => {
-  if (inspectorId === myId) inspecting = { targetId, until: Date.now() + durationMs, durationMs };
-  if (targetId === myId) {
-    beingInspectedBy = inspectorId;
-    const n = playerInfo.get(inspectorId)?.name || 'Someone';
-    feed(`${n} is inspecting YOUR sandals! (move to pull away — looks suspicious)`, 'sus');
-  }
-});
-socket.on('inspectCancelled', ({ inspectorId, targetId }) => {
-  if (inspectorId === myId) { inspecting = null; setProgress(null); }
-  if (targetId === myId) beingInspectedBy = null;
-});
-socket.on('inspectResult', ({ inspectorId, targetId, clean, stunMs }) => {
-  if (inspectorId === myId) {
-    inspecting = null; setProgress(null);
-    if (clean) {
-      stunnedUntil = Date.now() + stunMs;
-      $('stunOverlay').style.display = 'flex';
-      setTimeout(() => $('stunOverlay').style.display = 'none', stunMs);
-    }
-  }
-  if (targetId === myId) beingInspectedBy = null;
-  const r = remotes.get(targetId);
-  if (r && clean) { r.g.userData.badge.visible = true; }
-});
-socket.on('sandalsShown', ({ id, name }) => {
-  feed(`${name} shows everyone their sandals. Clean. 🩴`);
-  const r = remotes.get(id);
-  if (r) r.g.userData.badge.visible = true;
-});
-socket.on('knifePulled', () => blip(60, 0.8, 0.3));
-socket.on('gameOver', ({ winner, reason, evilName }) => {
-  phase = 'over';
-  document.exitPointerLock();
-  setPrompt(null); setProgress(null);
-  inspecting = null; lockpicking = false;
-  $('gameOverScreen').style.display = 'flex';
-  const t = $('goTitle');
-  if (winner === 'evil') { t.textContent = 'THE EVIL WINS'; t.style.color = '#ff5a5a'; }
-  else { t.textContent = 'CREW WINS'; t.style.color = '#7dffa8'; }
-  $('goReason').textContent = `${reason} The Evil was ${evilName}.`;
-});
-
-// ---- Chat ---------------------------------------------------------------------
-const chatInput = $('chatInput');
-let chatOpen = false;
-socket.on('chat', (m) => {
-  const d = document.createElement('div');
-  d.innerHTML = `<b style="color:#${m.color.toString(16).padStart(6, '0')}">${m.name}:</b> `;
-  d.append(m.text);
-  $('chatLog').appendChild(d);
-  $('chatLog').scrollTop = 1e6;
-  while ($('chatLog').children.length > 30) $('chatLog').firstChild.remove();
-});
-
 // ===========================================================================
-// Input
+// Input — keyboard, mouse, and gamepad
 // ===========================================================================
 const keys = {};
+const chatInput = $('chatInput');
+let chatOpen = false;
+
 addEventListener('keydown', (e) => {
   if (chatOpen) {
     if (e.key === 'Enter') {
-      if (chatInput.value.trim()) socket.emit('chat', { text: chatInput.value.trim() });
+      if (chatInput.value.trim()) send({ type: 'chat', text: chatInput.value.trim() });
       chatInput.value = '';
       closeChat();
     } else if (e.key === 'Escape') closeChat();
     return;
   }
   keys[e.code] = true;
-  if (e.code === 'Enter') { openChat(); e.preventDefault(); }
-  if (phase !== 'playing' || Date.now() < stunnedUntil) return;
+  if (e.code === 'Enter' && phase === 'playing') { openChat(); e.preventDefault(); }
+  if (phase !== 'playing' || blocked()) return;
   if (e.code === 'KeyF') tryInspect();
-  if (e.code === 'KeyG' && !seated) socket.emit('showSandals');
-  if (e.code === 'KeyQ') socket.emit('pullKnife');
+  if (e.code === 'KeyR') tryRestrain();
+  if (e.code === 'KeyG' && !seated) send({ type: 'show' });
+  if (e.code === 'KeyQ') send({ type: 'knife' });
   if (e.code === 'KeyE') onUse();
 });
 addEventListener('keyup', (e) => {
   keys[e.code] = false;
   if (e.code === 'KeyE' && lockpicking) stopLockpick();
 });
+function blocked() { return Date.now() < stunnedUntil || Date.now() < restrainedUntil; }
 function openChat() { chatOpen = true; chatInput.style.display = 'block'; document.exitPointerLock(); chatInput.focus(); }
 function closeChat() { chatOpen = false; chatInput.style.display = 'none'; chatInput.blur(); if (phase === 'playing') renderer.domElement.requestPointerLock(); }
 
@@ -542,31 +664,59 @@ addEventListener('mousemove', (e) => {
   pitch = Math.max(-1.45, Math.min(1.45, pitch - e.movementY * 0.0023));
 });
 
-function nearMySeat() {
-  return Math.abs(me.x - mySeat.x) < 0.9 && Math.abs(me.z - rowZ(mySeat.row)) < 0.9;
+// --- Gamepad (standard/Xbox mapping) ---------------------------------------
+const padPrev = [];
+let padSprint = false, padMove = { x: 0, y: 0 };
+function pollGamepad(dt) {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  let gp = null;
+  for (const p of pads) if (p && p.connected) { gp = p; break; }
+  padMove.x = 0; padMove.y = 0; padSprint = false;
+  if (!gp) return;
+  const dz = (v) => (Math.abs(v) > 0.18 ? v : 0);
+  padMove.x = dz(gp.axes[0] || 0);
+  padMove.y = dz(gp.axes[1] || 0);
+  yaw -= dz(gp.axes[2] || 0) * 2.8 * dt;
+  pitch = Math.max(-1.45, Math.min(1.45, pitch - dz(gp.axes[3] || 0) * 2.2 * dt));
+  padSprint = (gp.buttons[6]?.value || 0) > 0.4 || gp.buttons[10]?.pressed;
+
+  const now = (i) => !!gp.buttons[i]?.pressed;
+  const edge = (i) => { const v = now(i) && !padPrev[i]; return v; };
+
+  if (phase === 'lobby' && edge(9) && myId === hostId) send({ type: 'start' });
+  if (phase === 'playing' && !chatOpen && !blocked()) {
+    if (edge(0)) onUse();                                  // A = use / sit / lockpick
+    if (!now(0) && padPrev[0] && lockpicking) stopLockpick();
+    if (edge(2)) tryInspect();                             // X = inspect sandals
+    if (edge(1)) tryRestrain();                            // B = restrain
+    if (edge(3) && !seated) send({ type: 'show' });        // Y = show sandals
+    if (edge(5)) send({ type: 'knife' });                  // RB = pull knife
+  }
+  for (let i = 0; i < gp.buttons.length; i++) padPrev[i] = now(i);
 }
-function inDoorZone() {
-  return Math.abs(me.x) < 1.2 && Math.abs(me.z - DOOR_ZONE.z) < DOOR_ZONE.radius;
-}
+
+// --- Actions -------------------------------------------------------------------
+function nearMySeat() { return mySeat && Math.abs(me.x - mySeat.x) < 0.9 && Math.abs(me.z - rowZ(mySeat.row)) < 0.9; }
+function inDoorZone() { return Math.abs(me.x) < 1.2 && Math.abs(me.z - C.DOOR_ZONE.z) < C.DOOR_ZONE.radius; }
 function onUse() {
   if (seated) { seated = false; me.x = mySeat.x > 0 ? 0.2 : -0.2; me.z = rowZ(mySeat.row) + 0.85; return; }
   if (nearMySeat()) { seated = true; me.x = mySeat.x; me.z = rowZ(mySeat.row); yaw = Math.PI; return; }
   if (!doorOpen && inDoorZone()) {
     lockpicking = true;
-    socket.emit('lockpick', { active: true });
+    send({ type: 'lockpick', active: true });
     if (isEvil) setProgress('Picking the cockpit lock...', lockpickProgress);
   }
 }
 function stopLockpick() {
   lockpicking = false;
-  socket.emit('lockpick', { active: false });
+  send({ type: 'lockpick', active: false });
   setProgress(null);
 }
-
-function nearestStandingPlayer() {
-  let best = null, bd = INSPECT_RANGE;
+function nearestStanding(range, excludeRestrained) {
+  let best = null, bd = range;
   for (const [id, r] of remotes) {
     if (r.target.seated) continue;
+    if (excludeRestrained && r.target.restrained) continue;
     const d = Math.hypot(r.g.position.x - me.x, r.g.position.z - me.z);
     if (d < bd) { bd = d; best = id; }
   }
@@ -574,9 +724,19 @@ function nearestStandingPlayer() {
 }
 function tryInspect() {
   if (inspecting || seated) return;
-  const id = nearestStandingPlayer();
-  if (id) socket.emit('inspectStart', { targetId: id });
+  const id = nearestStanding(C.INSPECT_RANGE, false);
+  if (id) send({ type: 'inspect', targetId: id });
   else feed('No one standing close enough to inspect.', 'err');
+}
+function tryRestrain() {
+  if (seated) return;
+  if (Date.now() < restrainCooldownUntil) {
+    feed(`Still catching your breath (${Math.ceil((restrainCooldownUntil - Date.now()) / 1000)}s).`, 'err');
+    return;
+  }
+  const id = nearestStanding(C.RESTRAIN_RANGE, true);
+  if (id) send({ type: 'restrain', targetId: id });
+  else feed('No one standing close enough to restrain.', 'err');
 }
 
 // ===========================================================================
@@ -593,9 +753,7 @@ function collide(x, z) {
         const d = Math.sqrt(d2);
         x = cx + (dx / d) * RADIUS;
         z = cz + (dz / d) * RADIUS;
-      } else {
-        z = c.maxZ + RADIUS; // degenerate: push back
-      }
+      } else z = c.maxZ + RADIUS;
     }
   }
   x = Math.max(-2.55, Math.min(2.55, x));
@@ -612,32 +770,33 @@ function loop(t) {
   const dt = Math.min(0.05, (t - lastT) / 1000);
   lastT = t;
 
-  const playing = phase === 'playing';
-  const stunned = Date.now() < stunnedUntil;
+  pollGamepad(dt);
 
-  if (playing && !seated && !chatOpen && !stunned) {
-    const sprint = keys['ShiftLeft'] || keys['ShiftRight'];
+  const playing = phase === 'playing';
+
+  if (playing && !seated && !chatOpen && !blocked()) {
+    const sprint = keys['ShiftLeft'] || keys['ShiftRight'] || padSprint;
     const sp = (sprint ? SPRINT : WALK) * dt;
     let mx = 0, mz = 0;
     if (keys['KeyW']) { mx -= Math.sin(yaw); mz -= Math.cos(yaw); }
     if (keys['KeyS']) { mx += Math.sin(yaw); mz += Math.cos(yaw); }
     if (keys['KeyA']) { mx -= Math.cos(yaw); mz += Math.sin(yaw); }
     if (keys['KeyD']) { mx += Math.cos(yaw); mz -= Math.sin(yaw); }
+    // gamepad left stick: y = forward/back, x = strafe
+    mx += -Math.sin(yaw) * -padMove.y + Math.cos(yaw) * padMove.x;
+    mz += -Math.cos(yaw) * -padMove.y - Math.sin(yaw) * padMove.x;
     const l = Math.hypot(mx, mz);
-    if (l > 0) {
-      [me.x, me.z] = collide(me.x + (mx / l) * sp, me.z + (mz / l) * sp);
+    if (l > 0.01) {
+      [me.x, me.z] = collide(me.x + (mx / l) * Math.min(1, l) * sp, me.z + (mz / l) * Math.min(1, l) * sp);
       if (lockpicking && !inDoorZone()) stopLockpick();
     }
   }
 
-  // Camera
   camera.position.set(me.x, seated ? EYE_SEATED : EYE, me.z);
   camera.rotation.set(0, 0, 0);
   camera.rotateY(yaw);
   camera.rotateX(pitch);
-  me.ry = yaw;
 
-  // Remote players: interpolate
   for (const r of remotes.values()) {
     const g = r.g, tg = r.target;
     g.position.x += (tg.x - g.position.x) * Math.min(1, dt * 12);
@@ -645,10 +804,10 @@ function loop(t) {
     let dr = tg.ry - g.rotation.y;
     dr = ((dr + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
     g.rotation.y += dr * Math.min(1, dt * 10);
-    setPose(g, tg.seated);
+    setPose(g, tg.seated || tg.restrained); // restrained players are on the floor
+    g.userData.cuff.visible = !!tg.restrained;
   }
 
-  // Attendants + carts (cart rolls ahead of the attendant; collider follows)
   for (const a of attendantObjs) {
     a.g.position.set(0, 0, a.z);
     a.g.rotation.y = a.dir > 0 ? 0 : Math.PI;
@@ -658,45 +817,52 @@ function loop(t) {
     a.collider.minZ = cz - 0.5; a.collider.maxZ = cz + 0.5;
   }
 
-  // Door rattle shake
   if (doorRattleT > 0 && !doorOpen) {
     doorRattleT -= dt;
     doorGroup.position.x = Math.sin(t * 0.06) * 0.012;
     if (doorRattleT <= 0) doorGroup.position.x = 0;
   }
 
-  // Contextual prompt
+  // HUD
   if (playing && !chatOpen) {
-    if (stunned) setPrompt(null);
-    else if (seated) setPrompt('<b>E</b> stand up');
+    const now = Date.now();
+    if (now < restrainedUntil) {
+      setPrompt(`Restrained... ${Math.ceil((restrainedUntil - now) / 1000)}s`);
+    } else if (now < stunnedUntil) setPrompt(null);
+    else if (seated) setPrompt('<b>E / A</b> stand up');
     else if (!doorOpen && inDoorZone() && !lockpicking)
-      setPrompt(isEvil ? '<b>Hold E</b> pick the cockpit lock' : '<b>E</b> try the cockpit door (locked)');
-    else if (doorOpen && me.z < CABIN_FRONT && isEvil) setPrompt('<b>Q</b> pull the knife from your sandal');
-    else if (nearMySeat()) setPrompt('<b>E</b> sit down');
+      setPrompt(isEvil ? '<b>Hold E / A</b> pick the cockpit lock' : '<b>E / A</b> try the cockpit door (locked)');
+    else if (doorOpen && me.z < CABIN_FRONT && isEvil) setPrompt('<b>Q / RB</b> pull the knife from your sandal');
+    else if (nearMySeat()) setPrompt('<b>E / A</b> sit down');
     else {
-      const id = nearestStandingPlayer();
+      const id = nearestStanding(C.INSPECT_RANGE, false);
       if (id && !inspecting) {
         const n = playerInfo.get(id)?.name || '?';
-        setPrompt(`<b>F</b> inspect ${n}'s sandals · <b>G</b> show yours`);
+        setPrompt(`<b>F / X</b> inspect ${n} · <b>R / B</b> restrain ${n} · <b>G / Y</b> show yours`);
       } else if (!inspecting) setPrompt(null);
     }
     if (inspecting) {
-      const left = inspecting.until - Date.now();
+      const left = inspecting.until - now;
       const n = playerInfo.get(inspecting.targetId)?.name || '?';
       setProgress(`Inspecting ${n}'s sandals... (don't move)`, 1 - left / inspecting.durationMs);
     }
+    const cd = restrainCooldownUntil - now;
+    if (cd > 0) {
+      $('cooldown').style.display = 'block';
+      $('cooldown').textContent = `RESTRAIN ${Math.ceil(cd / 1000)}s`;
+    } else $('cooldown').style.display = 'none';
+    if (now >= restrainedUntil && now >= stunnedUntil && $('stunOverlay').style.display === 'flex')
+      $('stunOverlay').style.display = 'none';
   }
 
-  // Timer
   if (playing && endsAt) {
     const s = Math.max(0, Math.floor((endsAt - Date.now()) / 1000));
-    $('timer').textContent = `🛬 ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    $('timer').textContent = `LAND ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   } else $('timer').textContent = '';
 
-  // Network send
   if (playing && t - lastSend > 50) {
     lastSend = t;
-    socket.emit('move', { pos: { x: me.x, z: me.z }, ry: yaw, seated });
+    send({ type: 'move', pos: { x: me.x, z: me.z }, ry: yaw, seated });
   }
 
   renderer.render(scene, camera);
