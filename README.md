@@ -10,8 +10,14 @@ multiplayer (Trystero): one player creates a flight, gets a 4-letter code and a
 share link, and friends join straight from their browsers. The flight creator's
 browser acts as the game authority.
 
-▶ **Play:** see the link in the latest release/PR, or serve `public/` from any
-static host. For local play: `npm install && npm start` → http://localhost:3000
+▶ **Play now (no download):**
+https://rawcdn.githack.com/swendsenmichael5-lgtm/PLANEY/b1132b257da31b3a4454a632cfacf14a141ae470/public/index.html
+
+(That link pins to a specific commit — after pushing changes, regenerate it by
+swapping in the new commit SHA. Alternative mirror:
+`https://cdn.statically.io/gh/swendsenmichael5-lgtm/PLANEY/<SHA>/public/index.html`.)
+You can also serve `public/` from any static host, or locally:
+`npm install && npm start` → http://localhost:3000
 
 ## How a round works
 
