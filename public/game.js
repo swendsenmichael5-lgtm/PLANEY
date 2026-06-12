@@ -402,8 +402,8 @@ function send(msg) {
 
 function connect(code) {
   const appConfig = { appId: 'planey-sandal-knife-v1' };
-  room = joinRoom(appConfig, code.toUpperCase(), (err) => {
-    $('netStatus').textContent = `Connection problem: ${err.error}`;
+  room = joinRoom(appConfig, code.toUpperCase(), {
+    onJoinError: (err) => { $('netStatus').textContent = `Connection problem: ${err.error}`; },
   });
   const c2h = room.makeAction('c2h');
   const h2c = room.makeAction('h2c');
