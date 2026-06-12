@@ -60,24 +60,31 @@
   .screen { position: fixed; inset: 0; background:
     repeating-linear-gradient(0deg, #0a1020 0 4px, #0c1426 4px 8px);
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; z-index: 10; }
-  .screen h1 { font-size: 52px; letter-spacing: 8px; color: #6fd3ff; text-shadow: 4px 4px 0 #13315c; }
-  .screen h1 span { color: #ff5a5a; }
-  .screen p { color: #9fb3c8; max-width: 580px; text-align: center; line-height: 1.5; padding: 0 16px; }
-  .screen input { padding: 12px 16px; font-size: 18px; border: 2px solid #456;
+  .pxtitle { image-rendering: pixelated; image-rendering: crisp-edges; }
+  .screen p { color: #9fb3c8; max-width: 580px; text-align: center; line-height: 1.6; padding: 0 16px; }
+  .screen input { padding: 12px 16px; font-size: 18px; border: 3px solid #456; border-radius: 0;
     background: #0c1422; color: #fff; text-align: center; outline: none; width: 280px;
-    font-family: inherit; text-transform: none; }
+    font-family: inherit; text-transform: none; box-shadow: 4px 4px 0 #000; }
+  .screen input:focus { border-color: #6fd3ff; }
   .screen input.code { text-transform: uppercase; letter-spacing: 6px; width: 200px; }
-  .screen button { padding: 12px 30px; font-size: 17px; font-weight: 700; border: 2px solid #0a3a55;
-    background: #6fd3ff; color: #03263b; cursor: pointer; font-family: inherit; }
-  .screen button:hover { background: #9ce2ff; }
+  .screen button { padding: 12px 30px; font-size: 17px; font-weight: 700; border: 3px solid #03263b;
+    border-radius: 0; background: #6fd3ff; color: #03263b; cursor: pointer; font-family: inherit;
+    box-shadow: 4px 4px 0 #000; }
+  .screen button:hover { background: #9ce2ff; transform: translate(-1px,-1px); box-shadow: 5px 5px 0 #000; }
+  .screen button:active { transform: translate(2px,2px); box-shadow: 2px 2px 0 #000; }
   .screen button.alt { background: #1c2c44; color: #9ce2ff; border-color: #456; }
+  #scanlines { position: fixed; inset: 0; z-index: 60; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,0) 0 3px, rgba(0,0,0,.18) 3px 4px); }
+  #padStatus { font-size: 13px; color: #6e859e; }
+  #padStatus.on { color: #7dffa8; }
+  #introScreen p { font-size: 17px; color: #cfe7ff; max-width: 620px; }
+  #introScreen { background: rgba(4, 8, 16, .92); z-index: 30; }
   .screen .row { display: flex; gap: 12px; }
   #lobbyList { color: #cfe7ff; font-size: 15px; text-align: center; line-height: 1.8; }
   #shareWrap { display: flex; gap: 8px; align-items: center; }
   #shareLink { width: 420px; max-width: 80vw; font-size: 12px; letter-spacing: 0; text-transform: none; }
   #gameOverScreen { display: none; }
-  #gameOverScreen h1 { font-size: 42px; letter-spacing: 4px; }
-  .keys { font-size: 12px; color: #6e859e; max-width: 640px; text-align: center; line-height: 1.7; }
+    .keys { font-size: 12px; color: #6e859e; max-width: 640px; text-align: center; line-height: 1.7; }
   .keys b { color: #cfe7ff; }
   #netStatus { font-size: 13px; color: #ffae00; }
 </style>
@@ -100,7 +107,7 @@
 <canvas id="game"></canvas>
 
 <div id="menuScreen" class="screen">
-  <h1>PLANE<span>Y</span></h1>
+  <canvas class="pxtitle" id="menuTitle"></canvas>
   <p>Somewhere over the Atlantic. Everyone is wearing sandals. One passenger has a
      <b style="color:#ff5a5a">knife</b> in theirs, and they want the cockpit.
      Find them before they get there — or, if it's you... act natural.</p>
@@ -111,6 +118,7 @@
   </div>
   <input id="codeInput" class="code" maxlength="4" placeholder="CODE" autocomplete="off" style="display:none">
   <div id="netStatus"></div>
+  <div id="padStatus">🎮 controller: press any button to wake it</div>
   <p class="keys">
     <b>WASD</b>+mouse move/look · <b>Shift</b> hurry · <b>E</b> sit / use door · <b>F</b> inspect sandals ·
     <b>R</b> restrain · <b>G</b> show sandals · <b>Q</b> ??? · <b>Enter</b> chat · <b>M</b> music on/off<br>
@@ -120,7 +128,7 @@
 </div>
 
 <div id="lobbyScreen" class="screen" style="display:none">
-  <h1>BOARDING</h1>
+  <canvas class="pxtitle" id="lobbyTitle"></canvas>
   <p>Flight code: <b id="roomCode" style="color:#6fd3ff;font-size:22px;letter-spacing:4px"></b></p>
   <div id="shareWrap"><input id="shareLink" readonly><button id="copyBtn" class="alt">Copy</button></div>
   <div id="lobbyList"></div>
@@ -129,12 +137,19 @@
   <p id="lobbyWait" class="keys">Waiting for the host to start...</p>
 </div>
 
+<div id="introScreen" class="screen" style="display:none">
+  <canvas class="pxtitle" id="introTitle"></canvas>
+  <p id="introText"></p>
+  <p class="keys">press any key · click · or 🎮 A to buckle up</p>
+</div>
+
 <div id="gameOverScreen" class="screen">
-  <h1 id="goTitle"></h1>
+  <canvas class="pxtitle" id="goTitle"></canvas>
   <p id="goReason"></p>
   <p class="keys">Returning to the gate for another flight...</p>
 </div>
 
+<div id="scanlines"></div>
 <div id="hud">
   <div id="crosshair"></div>
   <div id="roleCard"></div>

@@ -241,7 +241,11 @@ export class HostLogic {
     this.lockpick = { progress: 0, picking: false, lastRattle: 0 };
     this.inspections.clear();
     this.commotionUntil = 0;
-    this.evilId = list[Math.floor(Math.random() * list.length)].id;
+    // With 2+ humans aboard, the Evil is always a human — CPUs are only
+    // ever the Evil when someone plays alone (or with a single friend short).
+    const humans = list.filter(p => !p.bot);
+    const pool = humans.length >= 2 ? humans : list;
+    this.evilId = pool[Math.floor(Math.random() * pool.length)].id;
     this.endsAt = Date.now() + C.GAME_LENGTH_MS;
     const now = Date.now();
     for (const p of list) {

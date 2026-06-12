@@ -32,6 +32,58 @@ const setProgress = (label, frac) => {
   $('progressBar').style.width = `${Math.round(frac * 100)}%`;
 };
 
+// --- Pixel-rendered titles: drawn tiny, upscaled with nearest-neighbor ------
+function pxTitle(cnv, parts, scale = 6) {
+  // parts: [[text, color], ...]
+  const c = cnv.getContext('2d');
+  const fs = 9;
+  c.font = `bold ${fs}px monospace`;
+  const total = parts.reduce((w, [t]) => w + c.measureText(t).width, 0);
+  cnv.width = Math.ceil(total) + 3;
+  cnv.height = fs + 4;
+  c.font = `bold ${fs}px monospace`;
+  let x = 0.5;
+  for (const [t, col] of parts) {
+    c.fillStyle = '#0a1a30';
+    c.fillText(t, x + 1, fs + 2);
+    c.fillStyle = col;
+    c.fillText(t, x, fs + 1);
+    x += c.measureText(t).width;
+  }
+  cnv.style.width = `${cnv.width * scale}px`;
+  cnv.style.height = `${cnv.height * scale}px`;
+}
+pxTitle($('menuTitle'), [['PLANE', '#6fd3ff'], ['Y', '#ff5a5a']], 8);
+pxTitle($('lobbyTitle'), [['BOARDING', '#6fd3ff']]);
+
+// --- Round intro: who you are this flight -----------------------------------
+let introTimer = null;
+function showIntro(evil) {
+  if (evil) {
+    pxTitle($('introTitle'), [['YOU ARE THE EVIL', '#ff5a5a']], 5);
+    $('introText').innerHTML =
+      'You are the evil <b style="color:#ff5a5a">knife-sandal person</b>. There is a knife hidden in your sandal. ' +
+      'Bide your time, blend in with the passengers, then get to the cockpit door, pick the lock ' +
+      '(<b>hold E / 🎮 A</b>), slip inside, and pull your knife (<b>Q / 🎮 RB</b>). Don’t get caught.';
+  } else {
+    pxTitle($('introTitle'), [['JUST FLYING HOME', '#7dffa8']], 5);
+    $('introText').innerHTML =
+      'You’re just trying to fly home — but somewhere on this plane is an evil ' +
+      '<b style="color:#ff5a5a">knife-sandal person</b> who wants to get into the cockpit and use their sandal ' +
+      'knife on the pilots. Watch the cabin, inspect sandals (<b>F / 🎮 X</b>), restrain suspects ' +
+      '(<b>R / 🎮 B</b>), and keep them away from that door.';
+  }
+  $('introScreen').style.display = 'flex';
+  clearTimeout(introTimer);
+  introTimer = setTimeout(hideIntro, 9000);
+}
+function hideIntro() {
+  clearTimeout(introTimer);
+  $('introScreen').style.display = 'none';
+}
+const introOpen = () => $('introScreen').style.display === 'flex';
+$('introScreen').addEventListener('click', hideIntro);
+
 let actx;
 function audio() {
   if (!actx) {
@@ -674,6 +726,7 @@ function onMsg(m) {
       hostId = m.hostId;
       if (phase === 'playing' || phase === 'over') {
         phase = 'lobby';
+        hideIntro();
         $('gameOverScreen').style.display = 'none';
         $('lobbyScreen').style.display = 'flex';
         $('roleCard').style.display = 'none';
@@ -704,6 +757,7 @@ function onMsg(m) {
       rc.innerHTML = m.evil
         ? '🔪 YOU ARE THE EVIL — knife in your sandal. Open the cockpit door (hold E / A), get in, pull the knife (Q / RB).'
         : '🩴 PASSENGER — someone has a knife in their sandal. Inspect (F / X) or restrain (R / B) before they reach the cockpit.';
+      showIntro(m.evil);
       break;
     }
     case 'started': {
@@ -832,10 +886,11 @@ function onMsg(m) {
       inspecting = null; lockpicking = false;
       $('stunOverlay').style.display = 'none';
       $('commotion').style.display = 'none';
+      hideIntro();
       $('gameOverScreen').style.display = 'flex';
-      const t = $('goTitle');
-      if (m.winner === 'evil') { t.textContent = 'THE EVIL WINS'; t.style.color = '#ff5a5a'; }
-      else { t.textContent = 'CREW WINS'; t.style.color = '#7dffa8'; }
+      pxTitle($('goTitle'), m.winner === 'evil'
+        ? [['THE EVIL WINS', '#ff5a5a']]
+        : [['CREW WINS', '#7dffa8']], 5);
       $('goReason').textContent = `${m.reason} The Evil was ${m.evilName}.`;
       break;
     }
@@ -873,6 +928,7 @@ addEventListener('keydown', (e) => {
     } else if (e.key === 'Escape') closeChat();
     return;
   }
+  if (introOpen()) { hideIntro(); e.preventDefault(); return; }
   keys[e.code] = true;
   if (e.code === 'KeyM') toggleMusic();
   if (e.code === 'Enter' && phase === 'playing') { openChat(); e.preventDefault(); }
@@ -900,27 +956,56 @@ addEventListener('mousemove', (e) => {
   pitch = Math.max(-1.45, Math.min(1.45, pitch - e.movementY * 0.0023));
 });
 
-// --- Gamepad (standard/Xbox mapping) ---------------------------------------
+// --- Gamepad (Xbox/standard mapping, with fallbacks) -------------------------
 const padPrev = [];
-let padSprint = false, padMove = { x: 0, y: 0 };
+let padSprint = false, padMove = { x: 0, y: 0 }, padSeen = false;
+function padDetected(gp) {
+  if (padSeen) return;
+  padSeen = true;
+  const ps = $('padStatus');
+  if (ps) { ps.textContent = `🎮 controller connected: ${gp.id.slice(0, 40)}`; ps.className = 'on'; }
+  feed('🎮 Controller connected.', 'serve');
+}
+addEventListener('gamepadconnected', (e) => padDetected(e.gamepad));
+addEventListener('gamepaddisconnected', () => {
+  padSeen = false;
+  const ps = $('padStatus');
+  if (ps) { ps.textContent = '🎮 controller disconnected'; ps.className = ''; }
+});
+
 function pollGamepad(dt) {
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   let gp = null;
   for (const p of pads) if (p && p.connected) { gp = p; break; }
   padMove.x = 0; padMove.y = 0; padSprint = false;
   if (!gp) return;
+  padDetected(gp);
   const dz = (v) => (Math.abs(v) > 0.18 ? v : 0);
+  const now = (i) => !!gp.buttons[i]?.pressed;
+  const edge = (i) => now(i) && !padPrev[i];
+
+  // Left stick (+ D-pad fallback) moves, right stick looks.
   padMove.x = dz(gp.axes[0] || 0);
   padMove.y = dz(gp.axes[1] || 0);
-  yaw -= dz(gp.axes[2] || 0) * 2.8 * dt;
-  pitch = Math.max(-1.45, Math.min(1.45, pitch - dz(gp.axes[3] || 0) * 2.2 * dt));
+  if (now(14)) padMove.x = -1;
+  if (now(15)) padMove.x = 1;
+  if (now(12)) padMove.y = -1;
+  if (now(13)) padMove.y = 1;
+  // Some browser/pad combos put the right stick on axes 3/4 instead of 2/3.
+  const altSticks = gp.mapping !== 'standard' && gp.axes.length >= 5;
+  const rx = dz((altSticks ? gp.axes[3] : gp.axes[2]) || 0);
+  const ryx = dz((altSticks ? gp.axes[4] : gp.axes[3]) || 0);
+  yaw -= rx * 2.8 * dt;
+  pitch = Math.max(-1.45, Math.min(1.45, pitch - ryx * 2.2 * dt));
   padSprint = (gp.buttons[6]?.value || 0) > 0.4 || gp.buttons[10]?.pressed;
 
-  const now = (i) => !!gp.buttons[i]?.pressed;
-  const edge = (i) => { const v = now(i) && !padPrev[i]; return v; };
-
-  if (phase === 'lobby' && edge(9) && myId === hostId) send({ type: 'start' });
-  if (phase === 'playing' && !chatOpen && !blocked()) {
+  if (introOpen() && (edge(0) || edge(9))) {
+    hideIntro();
+  } else if (phase === 'menu') {
+    if (edge(0) || edge(9)) $('createBtn').onclick();      // A/Start = board
+  } else if (phase === 'lobby') {
+    if ((edge(0) || edge(9)) && myId === hostId) send({ type: 'start' });
+  } else if (phase === 'playing' && !chatOpen && !blocked()) {
     if (edge(0)) onUse();                                  // A = use / sit / lockpick
     if (!now(0) && padPrev[0] && lockpicking) stopLockpick();
     if (edge(2)) tryInspect();                             // X = inspect sandals
