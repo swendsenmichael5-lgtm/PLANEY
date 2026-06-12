@@ -402,11 +402,13 @@ function send(msg) {
 
 function connect(code) {
   const appConfig = { appId: 'planey-sandal-knife-v1' };
-  room = joinRoom(appConfig, code.toUpperCase());
-  const [c2hSend, onC2H] = room.makeAction('c2h');
-  const [h2cSend, onH2C] = room.makeAction('h2c');
-  sendC2H = c2hSend;
-  sendH2C = h2cSend;
+  room = joinRoom(appConfig, code.toUpperCase(), (err) => {
+    $('netStatus').textContent = `Connection problem: ${err.error}`;
+  });
+  const c2h = room.makeAction('c2h');
+  const h2c = room.makeAction('h2c');
+  sendC2H = (msg) => c2h.send(msg).catch(() => {});
+  sendH2C = (msg, target) => h2c.send(msg, target ? { target } : undefined).catch(() => {});
 
   if (isHost) {
     logic = new HostLogic(myId, (target, msg) => {
@@ -414,18 +416,18 @@ function connect(code) {
       else if (target === myId) onMsg(msg);
       else sendH2C(msg, target);
     });
-    onC2H((msg, peerId) => logic.handle(peerId, msg));
+    c2h.onMessage = (msg, { peerId }) => logic.handle(peerId, msg);
     hostTick = setInterval(() => logic.tick(), C.TICK_MS);
-    room.onPeerLeave((peerId) => logic.removePlayer(peerId));
+    room.onPeerLeave = (peerId) => logic.removePlayer(peerId);
     logic.handle(myId, { type: 'join', name: myName });
   } else {
-    onH2C((msg) => onMsg(msg));
-    room.onPeerLeave((peerId) => {
+    h2c.onMessage = (msg) => onMsg(msg);
+    room.onPeerLeave = (peerId) => {
       if (peerId === hostId) {
         alert('The flight host left. Returning to the gate.');
         location.href = location.pathname;
       }
-    });
+    };
     // Keep knocking until the host answers with init
     joinRetry = setInterval(() => send({ type: 'join', name: myName }), 1500);
     send({ type: 'join', name: myName });
