@@ -34,9 +34,80 @@ const setProgress = (label, frac) => {
 };
 
 let actx;
+function audio() {
+  if (!actx) {
+    actx = new AudioContext();
+    startMusic();
+  }
+  if (actx.state === 'suspended') actx.resume();
+  return actx;
+}
+
+// --- Elevator music: soft piano loop, generated live (no audio files) ------
+let musicGain = null, musicOn = true, musicNextBar = 0, musicStep = 0;
+const midi = (n) => 440 * Math.pow(2, (n - 69) / 12);
+// Cmaj7 → Am7 → Dm7 → G7, the eternal lobby loop
+const PROG = [
+  { bass: 36, chord: [60, 64, 67, 71] },
+  { bass: 33, chord: [57, 60, 64, 67] },
+  { bass: 38, chord: [57, 62, 65, 69] },
+  { bass: 31, chord: [59, 62, 65, 67] },
+];
+const ARP = [0, 2, 1, 3, 2, 1]; // gentle broken-chord pattern
+function pianoNote(t, note, dur, vel) {
+  const g = actx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(0.2 * vel, t + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  // a few decaying harmonics ≈ a tired hotel-lobby piano
+  for (const [mult, amp] of [[1, 1], [2, 0.35], [3, 0.12], [4.01, 0.05]]) {
+    const o = actx.createOscillator();
+    o.type = 'sine';
+    o.frequency.value = midi(note) * mult;
+    const og = actx.createGain();
+    og.gain.value = amp;
+    o.connect(og).connect(g);
+    o.start(t);
+    o.stop(t + dur + 0.1);
+  }
+  g.connect(musicGain);
+}
+function startMusic() {
+  if (musicGain) return;
+  const lp = actx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 2200;
+  musicGain = actx.createGain();
+  musicGain.gain.value = musicOn ? 0.32 : 0;
+  musicGain.connect(lp).connect(actx.destination);
+  musicNextBar = actx.currentTime + 0.1;
+  setInterval(() => {
+    // schedule a bar ahead of time so timers can be sloppy
+    while (musicNextBar < actx.currentTime + 1.5) {
+      const bar = PROG[musicStep % PROG.length];
+      const t = musicNextBar, barLen = 2.4, n = ARP.length, sw = barLen / n;
+      pianoNote(t, bar.bass, barLen, 0.5);
+      pianoNote(t, bar.bass + 12, barLen, 0.25);
+      for (let i = 0; i < n; i++) {
+        const jitter = Math.random() * 0.02;
+        pianoNote(t + i * sw + jitter, bar.chord[ARP[i]], sw * 1.8, 0.32 + Math.random() * 0.1);
+      }
+      // occasional sleepy grace note up top
+      if (Math.random() < 0.25) pianoNote(t + barLen * 0.75, bar.chord[3] + 12, 1.2, 0.15);
+      musicNextBar += barLen;
+      musicStep++;
+    }
+  }, 400);
+}
+function toggleMusic() {
+  musicOn = !musicOn;
+  if (musicGain) musicGain.gain.linearRampToValueAtTime(musicOn ? 0.32 : 0, actx.currentTime + 0.3);
+  feed(musicOn ? 'Cabin music on.' : 'Cabin music off.', 'serve');
+}
+
 function blip(freq, dur = 0.08, gain = 0.15) {
   try {
-    actx = actx || new AudioContext();
+    audio();
     const o = actx.createOscillator(), g = actx.createGain();
     o.frequency.value = freq; o.type = 'square';
     g.gain.setValueAtTime(gain, actx.currentTime);
@@ -396,6 +467,7 @@ $('codeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('jo
 $('nameInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('createBtn').click(); });
 
 function enterLobby(code) {
+  try { audio(); } catch {}
   phase = 'lobby';
   $('menuScreen').style.display = 'none';
   $('lobbyScreen').style.display = 'flex';
@@ -639,6 +711,7 @@ addEventListener('keydown', (e) => {
     return;
   }
   keys[e.code] = true;
+  if (e.code === 'KeyM') toggleMusic();
   if (e.code === 'Enter' && phase === 'playing') { openChat(); e.preventDefault(); }
   if (phase !== 'playing' || blocked()) return;
   if (e.code === 'KeyF') tryInspect();

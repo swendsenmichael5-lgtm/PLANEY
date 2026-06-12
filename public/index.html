@@ -83,6 +83,20 @@
 </style>
 </head>
 <body>
+<script>
+  // If the game module fails to load, show the error instead of dead buttons
+  addEventListener('error', (e) => {
+    let d = document.getElementById('errBox');
+    if (!d) {
+      d = document.createElement('div');
+      d.id = 'errBox';
+      d.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:99;background:#5c1313;color:#ffd0d0;font:13px monospace;padding:8px 12px;white-space:pre-wrap';
+      document.body.appendChild(d);
+    }
+    d.textContent = 'Something broke — please report this: ' + (e.message || e.reason || e.error || 'unknown') + (e.filename ? ` (${e.filename.split('/').pop()}:${e.lineno})` : '');
+  });
+  addEventListener('unhandledrejection', (e) => dispatchEvent(new ErrorEvent('error', { message: String(e.reason) })));
+</script>
 <canvas id="game"></canvas>
 
 <div id="menuScreen" class="screen">
@@ -99,7 +113,7 @@
   <div id="netStatus"></div>
   <p class="keys">
     <b>WASD</b>+mouse move/look · <b>Shift</b> hurry · <b>E</b> sit / use door · <b>F</b> inspect sandals ·
-    <b>R</b> restrain · <b>G</b> show sandals · <b>Q</b> ??? · <b>Enter</b> chat<br>
+    <b>R</b> restrain · <b>G</b> show sandals · <b>Q</b> ??? · <b>Enter</b> chat · <b>M</b> music on/off<br>
     🎮 <b>Left stick</b> move · <b>Right stick</b> look · <b>A</b> use · <b>X</b> inspect ·
     <b>B</b> restrain · <b>Y</b> show sandals · <b>RB</b> ??? · <b>LT</b> hurry · <b>Start</b> take off
   </p>
