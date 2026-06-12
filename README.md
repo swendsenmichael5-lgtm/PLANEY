@@ -21,8 +21,12 @@ You can also serve `public/` from any static host, or locally:
 
 ## How a round works
 
-- 18 rows of seats full of NPC passengers, plus flight attendants Brenda and
-  Doug pushing drink carts up and down the aisle offering peanuts and Coke.
+- A wide-body twin-aisle jet (3-4-3, 22 rows) with open cross-walkways and
+  galleys, full of NPC passengers — some of whom randomly get up, stretch
+  their legs, and sit back down, so anyone walking the aisle looks ordinary.
+  Four flight attendants push drink carts along both aisles offering peanuts
+  and Coke. Generated cabin ambience plays throughout: pressurized hum,
+  murmured conversations, ice clinking in cups, seatbelt chimes.
 - The **Evil** must reach the cockpit door, **hold E / A for ~9s** to pick the
   lock, step inside, and press **Q / RB** to pull the knife. Evil wins.
 - The **crew** wins by finding the knife: inspect a standing player's sandals
@@ -50,7 +54,7 @@ You can also serve `public/` from any static host, or locally:
 | Innocents can clear themselves | **G / Y** shows clean sandals — the Evil showing theirs loses instantly |
 | Refusal is a tell | Pulling feet away from an inspection is broadcast to everyone |
 | Restraints | Get tackled near the door and you're a sitting duck for an inspection |
-| Carts block the aisle | The attendants' carts physically jam the aisle |
+| Carts block the aisles | The attendants and their carts are solid and jam the aisles |
 | The clock | Landing = crew win, so pure hiding loses |
 
 …and why it's still fair: one inspection per player (a wrong one stuns you for

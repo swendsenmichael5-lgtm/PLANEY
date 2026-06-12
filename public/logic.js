@@ -15,21 +15,93 @@ export const C = {
   RESTRAIN_COOLDOWN_MS: 30000,
   COMMOTION_MS: 12000,
   COMMOTION_LOCKPICK_MULT: 2.5,
-  DOOR_ZONE: { z: -23.0, radius: 1.6 },
-  COCKPIT_Z: -24.2,
+  DOOR_ZONE: { z: -25.0, radius: 1.6 },
+  COCKPIT_Z: -26.2,
   TICK_MS: 50,
 };
 
+// ---------------------------------------------------------------------------
+// Wide-body twin-aisle layout (3-4-3, like a flight to Europe).
+// Shared between host logic and the client renderer.
+// ---------------------------------------------------------------------------
+export const L = {
+  ROWS: 22,
+  ROW0_Z: -22,
+  ROW_DZ: 2.2,
+  CROSS_ROWS: [10, 11],                                 // open cross-walkway, no seats
+  BLOCKS: [[-4.2, -3.5, -2.8], [-1.2, -0.4, 0.4, 1.2], [2.8, 3.5, 4.2]],
+  AISLE_X: 2.0,                                          // aisles at ±2.0
+  HALF_W: 4.6,                                           // walkable half-width
+  CABIN_FRONT: -26,                                      // cockpit bulkhead
+  CABIN_BACK: 26.5,                                      // rear galley wall
+  COCKPIT_BACK: -30.5,
+};
+L.CROSS_Z = L.ROW0_Z + L.CROSS_ROWS[0] * L.ROW_DZ + 1.1; // middle of the open band
+const rowZ = (row) => L.ROW0_Z + row * L.ROW_DZ;
+export const rowOfZ = (z) => Math.max(1, Math.round((z - L.ROW0_Z) / L.ROW_DZ) + 1);
+
+// Seats handed to joining players (aisle-adjacent so standing up looks natural)
+const PLAYER_SEAT_XS = [2.8, -2.8, 1.2, -1.2];
+const PLAYER_SEATS = [];
+{
+  let k = 0;
+  for (let r = 1; r < L.ROWS - 1; r += 2) {
+    if (L.CROSS_ROWS.includes(r)) continue;
+    PLAYER_SEATS.push({ row: r, x: PLAYER_SEAT_XS[k++ % 4] });
+    PLAYER_SEATS.push({ row: r, x: PLAYER_SEAT_XS[k++ % 4] });
+  }
+}
+
+// Deterministic list of NPC-occupied seats — host and clients compute the
+// same list, so the host can animate "extras" by index.
+export function npcSeatList() {
+  const taken = new Set(PLAYER_SEATS.map(s => `${s.row}:${s.x}`));
+  const out = [];
+  for (let r = 0; r < L.ROWS; r++) {
+    if (L.CROSS_ROWS.includes(r)) continue;
+    for (const block of L.BLOCKS) {
+      for (const x of block) {
+        if (taken.has(`${r}:${x}`)) continue;
+        const h = Math.abs(Math.sin(r * 12.9898 + x * 78.233) * 43758.5453) % 1;
+        if (h < 0.55) out.push({ row: r, x, z: rowZ(r) });
+      }
+    }
+  }
+  return out;
+}
+
+// Walk toward (tx, tz) through the aisles; crosses sides only at the open
+// bands (front galley, mid cross-walkway, rear galley). Returns null when
+// arrived, else the next position + facing.
+export function stepToward(pos, tx, tz, sp, dt) {
+  const sgn = (v) => (v >= 0 ? 1 : -1);
+  let dx = 0, dz = 0;
+  const targetSide = Math.abs(tx) > 1.6 ? sgn(tx) : sgn(pos.x);
+  const ax = L.AISLE_X * targetSide;
+  const wrongSide = sgn(pos.x) !== targetSide && Math.abs(pos.x) > 0.5;
+  if (wrongSide) {
+    const bands = [L.CABIN_FRONT + 1.7, L.CROSS_Z, L.CABIN_BACK - 1.7];
+    const cz = bands.reduce((a, b) =>
+      Math.abs(b - pos.z) + Math.abs(b - tz) < Math.abs(a - pos.z) + Math.abs(a - tz) ? b : a);
+    if (Math.abs(pos.z - cz) > 0.35) {
+      const curAx = L.AISLE_X * sgn(pos.x);
+      if (Math.abs(pos.x) > L.AISLE_X + 0.35) dx = sgn(curAx - pos.x); // out of the seat block first
+      else dz = sgn(cz - pos.z);
+    } else dx = sgn(ax - pos.x); // cut across the open band
+  } else if (Math.abs(pos.z - tz) > 0.2 && Math.abs(pos.x - ax) > 0.35) dx = sgn(ax - pos.x);
+  else if (Math.abs(pos.z - tz) > 0.2) dz = sgn(tz - pos.z);
+  else if (Math.abs(pos.x - tx) > 0.15) dx = sgn(tx - pos.x);
+  else return null;
+  return { x: pos.x + dx * sp * dt, z: pos.z + dz * sp * dt, ry: Math.atan2(-dx, -dz) };
+}
+const standPos = (seat) => ({ x: L.AISLE_X * (seat.x >= 0 ? 1 : -1), z: rowZ(seat.row) + 0.85 });
+
 const COLORS = [0xe74c3c, 0x3498db, 0x2ecc71, 0xf1c40f, 0x9b59b6, 0xe67e22, 0x1abc9c, 0xfd79a8, 0x95a5a6, 0x6c5ce7];
 const BOT_NAMES = ['Brad', 'Tina', 'Earl', 'Donna', 'Phil', 'Gloria', 'Chuck', 'Rhonda', 'Vern', 'Patty'];
-const MIN_FLIERS = 6; // empty seats are filled with CPU passengers
-const PLAYER_SEATS = [];
-for (let i = 2; i < 17; i += 2) {
-  PLAYER_SEATS.push({ row: i, x: -1.5 });
-  PLAYER_SEATS.push({ row: i + 1, x: 1.5 });
-}
-const rowZ = (row) => -20 + row * 2.2;
+const MIN_FLIERS = 8; // empty seats are filled with CPU passengers
 const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+const NPC_SEATS = npcSeatList();
+const EXTRA_COUNT = 10; // ambient NPCs that wander so nobody walking looks odd
 const SERVE_LINES = ['Peanuts?', 'Coke or Sprite?', 'Pretzels, anyone?', 'More peanuts, hon?', 'Coke? Diet Coke?', 'Please keep the aisle clear.'];
 
 export class HostLogic {
@@ -50,9 +122,22 @@ export class HostLogic {
     this.suspicion = new Map();   // playerId -> score the CPU crew uses to hunt
     this.cleared = new Set();     // verified-clean players (CPUs ignore them)
     this.attendants = [
-      { z: 18, dir: -1, pauseUntil: 0, speed: 0.9, name: 'Brenda' },
-      { z: -16, dir: 1, pauseUntil: 0, speed: 0.8, name: 'Doug' },
+      { x: -L.AISLE_X, z: 20, dir: -1, pauseUntil: 0, speed: 0.9, name: 'Brenda' },
+      { x: -L.AISLE_X, z: -16, dir: 1, pauseUntil: 0, speed: 0.8, name: 'Doug' },
+      { x: L.AISLE_X, z: 8, dir: 1, pauseUntil: 0, speed: 0.85, name: 'Carol' },
+      { x: L.AISLE_X, z: -10, dir: -1, pauseUntil: 0, speed: 0.95, name: 'Stan' },
     ];
+    // Wandering NPC extras: index into the shared npcSeatList()
+    const stride = Math.max(1, Math.floor(NPC_SEATS.length / EXTRA_COUNT));
+    this.extras = [];
+    for (let i = 0; i < EXTRA_COUNT && i * stride < NPC_SEATS.length; i++) {
+      const seat = NPC_SEATS[i * stride];
+      this.extras.push({
+        i: i * stride, seat,
+        pos: { x: seat.x, z: seat.z }, ry: Math.PI, seated: true,
+        state: 'idle', t: Date.now() + 5000 + Math.random() * 40000, tz: 0,
+      });
+    }
   }
 
   pub(p) {
@@ -300,23 +385,15 @@ export class HostLogic {
   // Movement goes through handle('move') so inspection-dodging, restraint
   // blocking and clink detection all apply to CPUs exactly like humans.
   botStep(p, tx, tz, sp, dt) {
-    const { x, z } = p.pos;
-    let dx = 0, dz = 0;
-    if (Math.abs(z - tz) > 0.2 && Math.abs(x) > 0.3) dx = -Math.sign(x); // get to the aisle first
-    else if (Math.abs(z - tz) > 0.2) dz = Math.sign(tz - z);
-    else if (Math.abs(x - tx) > 0.15) dx = Math.sign(tx - x);
-    else return true;
-    this.handle(p.id, {
-      type: 'move',
-      pos: { x: x + dx * sp * dt, z: z + dz * sp * dt },
-      ry: Math.atan2(-dx, -dz),
-      seated: false,
-    });
+    const nxt = stepToward(p.pos, tx, tz, sp, dt);
+    if (!nxt) return true;
+    this.handle(p.id, { type: 'move', pos: { x: nxt.x, z: nxt.z }, ry: nxt.ry, seated: false });
     return false;
   }
 
   botStand(p) {
-    this.handle(p.id, { type: 'move', pos: { x: p.seat.x > 0 ? 0.2 : -0.2, z: rowZ(p.seat.row) + 0.85 }, ry: 0, seated: false });
+    const s = standPos(p.seat);
+    this.handle(p.id, { type: 'move', pos: s, ry: 0, seated: false });
   }
 
   updateBots(now, dt) {
@@ -341,7 +418,7 @@ export class HostLogic {
         case 'seated':
           if (now >= ai.t) {
             ai.state = 'stroll';
-            ai.tz = Math.random() < 0.35 ? 19 : rowZ(Math.floor(Math.random() * 18));
+            ai.tz = Math.random() < 0.35 ? L.CABIN_BACK - 1.7 : rowZ(Math.floor(Math.random() * L.ROWS));
             ai.t = now + 25000;
             this.botStand(p);
           }
@@ -355,7 +432,7 @@ export class HostLogic {
           if (now >= ai.t) ai.state = 'return';
           break;
         case 'return':
-          if (this.botStep(p, p.seat.x > 0 ? 0.2 : -0.2, rowZ(p.seat.row) + 0.85, 1.8, dt)) {
+          if (this.botStep(p, standPos(p.seat).x, standPos(p.seat).z, 1.8, dt)) {
             this.handle(p.id, { type: 'move', pos: { x: p.seat.x, z: rowZ(p.seat.row) }, ry: Math.PI, seated: true });
             ai.state = 'seated'; ai.t = now + 8000 + Math.random() * 25000;
           }
@@ -414,7 +491,7 @@ export class HostLogic {
       }
       case 'loiter':
         this.handle(p.id, { type: 'lockpick', active: false });
-        if (this.botStep(p, 0.2, -13, 1.8, dt) && now >= ai.t) ai.state = 'mission';
+        if (this.botStep(p, -L.AISLE_X, -15, 1.8, dt) && now >= ai.t) ai.state = 'mission';
         if (this.doorOpen) ai.state = 'breach';
         break;
       case 'breach':
@@ -429,11 +506,48 @@ export class HostLogic {
     const now = Date.now();
     const dt = C.TICK_MS / 1000;
 
+    // Ambient extras: ordinary passengers stand, stretch their legs, sit back
+    // down — so a player walking the aisle never looks out of place.
+    for (const e of this.extras) {
+      switch (e.state) {
+        case 'idle':
+          if (now >= e.t) {
+            e.state = 'out'; e.seated = false;
+            const sp = standPos(e.seat);
+            e.pos = { x: sp.x, z: sp.z };
+            e.tz = Math.random() < 0.3
+              ? (Math.random() < 0.5 ? L.CABIN_FRONT + 1.7 : L.CABIN_BACK - 1.7) // "bathroom" trip
+              : rowZ(Math.floor(Math.random() * L.ROWS));
+            e.t = now + 30000;
+          }
+          break;
+        case 'out': {
+          const nxt = stepToward(e.pos, L.AISLE_X * (e.pos.x >= 0 ? 1 : -1), e.tz, 1.5, dt);
+          if (nxt) { e.pos = { x: nxt.x, z: nxt.z }; e.ry = nxt.ry; }
+          if (!nxt || now >= e.t) { e.state = 'wait'; e.t = now + 2500 + Math.random() * 6000; }
+          break;
+        }
+        case 'wait':
+          if (now >= e.t) { e.state = 'home'; e.t = now + 30000; }
+          break;
+        case 'home': {
+          const sp = standPos(e.seat);
+          const nxt = stepToward(e.pos, sp.x, sp.z, 1.5, dt);
+          if (nxt) { e.pos = { x: nxt.x, z: nxt.z }; e.ry = nxt.ry; }
+          if (!nxt || now >= e.t) {
+            e.pos = { x: e.seat.x, z: e.seat.z }; e.ry = Math.PI; e.seated = true;
+            e.state = 'idle'; e.t = now + 15000 + Math.random() * 60000;
+          }
+          break;
+        }
+      }
+    }
+
     for (const a of this.attendants) {
       if (now >= a.pauseUntil) {
         a.z += a.dir * a.speed * dt;
-        if (a.z > 19) { a.z = 19; a.dir = -1; a.pauseUntil = now + 3000; }
-        if (a.z < -19) { a.z = -19; a.dir = 1; a.pauseUntil = now + 3000; }
+        if (a.z > L.CABIN_BACK - 1.7) { a.z = L.CABIN_BACK - 1.7; a.dir = -1; a.pauseUntil = now + 3000; }
+        if (a.z < L.CABIN_FRONT + 4) { a.z = L.CABIN_FRONT + 4; a.dir = 1; a.pauseUntil = now + 3000; }
         if (Math.random() < 0.012) {
           a.pauseUntil = now + 2500 + Math.random() * 3000;
           if (now - this.lastServe > 4000) {
@@ -534,7 +648,8 @@ export class HostLogic {
         id: p.id, pos: p.pos, ry: p.ry, seated: p.seated,
         stunned: now < p.stunnedUntil, restrained: now < p.restrainedUntil,
       })),
-      attendants: this.attendants.map(a => ({ z: a.z, dir: a.dir })),
+      attendants: this.attendants.map(a => ({ x: a.x, z: a.z, dir: a.dir })),
+      extras: this.extras.map(e => ({ i: e.i, x: +e.pos.x.toFixed(2), z: +e.pos.z.toFixed(2), s: e.seated ? 1 : 0 })),
       doorOpen: this.doorOpen,
       commotion: now < this.commotionUntil,
     });

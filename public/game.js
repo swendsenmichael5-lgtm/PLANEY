@@ -1,14 +1,13 @@
 import * as THREE from 'three';
 import { joinRoom, selfId } from './vendor/trystero-nostr.js';
-import { HostLogic, C } from './logic.js';
+import { HostLogic, C, L, npcSeatList, rowOfZ } from './logic.js';
 
 // ===========================================================================
-// Constants
+// Constants (layout comes from logic.js so host AI and renderer agree)
 // ===========================================================================
-const ROWS = 18;
-const rowZ = (r) => -20 + r * 2.2;
-const SEAT_XS = [-2.2, -1.5, -0.8, 0.8, 1.5, 2.2];
-const CABIN_FRONT = -24, CABIN_BACK = 20.5, COCKPIT_BACK = -28;
+const ROWS = L.ROWS;
+const rowZ = (r) => L.ROW0_Z + r * L.ROW_DZ;
+const CABIN_FRONT = L.CABIN_FRONT, CABIN_BACK = L.CABIN_BACK, COCKPIT_BACK = L.COCKPIT_BACK;
 const EYE = 1.55, EYE_SEATED = 1.05;
 const WALK = 2.3, SPRINT = 4.2, RADIUS = 0.32;
 const PIXEL = 4; // render at 1/4 resolution for chunky pixels
@@ -38,6 +37,7 @@ function audio() {
   if (!actx) {
     actx = new AudioContext();
     startMusic();
+    startAmbience();
   }
   if (actx.state === 'suspended') actx.resume();
   return actx;
@@ -105,6 +105,123 @@ function toggleMusic() {
   feed(musicOn ? 'Cabin music on.' : 'Cabin music off.', 'serve');
 }
 
+// --- Cabin ambience: hum, murmured chatter, glass clinks, chimes, coughs ----
+// All generated live with WebAudio — the goal is the *inside* of a red-eye:
+// low pressurized rumble, unintelligible conversations, ice in plastic cups.
+let ambGain = null;
+function noiseBuffer(seconds) {
+  const len = Math.floor(actx.sampleRate * seconds);
+  const buf = actx.createBuffer(1, len, actx.sampleRate);
+  const d = buf.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < len; i++) { // brown-ish noise
+    last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02;
+    d[i] = last * 3.5;
+  }
+  return buf;
+}
+function panTo(pan) {
+  const p = actx.createStereoPanner ? actx.createStereoPanner() : actx.createGain();
+  if (p.pan) p.pan.value = pan;
+  p.connect(ambGain);
+  return p;
+}
+function startAmbience() {
+  if (ambGain) return;
+  ambGain = actx.createGain();
+  ambGain.gain.value = 1;
+  ambGain.connect(actx.destination);
+  // 1) cabin hum — constant pressurized rumble
+  const hum = actx.createBufferSource();
+  hum.buffer = noiseBuffer(3);
+  hum.loop = true;
+  const hlp = actx.createBiquadFilter(); hlp.type = 'lowpass'; hlp.frequency.value = 220;
+  const hg = actx.createGain(); hg.gain.value = 0.4;
+  hum.connect(hlp).connect(hg).connect(ambGain);
+  hum.start();
+  // 2) five murmuring "voices" scattered around the cabin, taking turns
+  for (let v = 0; v < 5; v++) loopTimer(() => murmur(v), 1500, 6500);
+  // 3) drinks, chimes, coughs
+  loopTimer(glassClink, 4000, 12000);
+  loopTimer(seatbeltChime, 70000, 120000);
+  loopTimer(cough, 14000, 30000);
+}
+function loopTimer(fn, min, spread) {
+  const go = () => { try { fn(); } catch {} setTimeout(go, min + Math.random() * spread); };
+  setTimeout(go, Math.random() * spread);
+}
+function murmur(v) {
+  const t0 = actx.currentTime;
+  const female = v % 2 === 1;
+  const f0 = female ? 165 + Math.random() * 60 : 95 + Math.random() * 40;
+  const pan = panTo((Math.random() * 2 - 1) * 0.8);
+  const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 850; // muffled, unintelligible
+  const bp = actx.createBiquadFilter(); bp.type = 'bandpass';
+  bp.frequency.value = female ? 750 : 520; bp.Q.value = 0.7;
+  const master = actx.createGain(); master.gain.value = 0.045 + Math.random() * 0.035;
+  master.connect(bp).connect(lp).connect(pan);
+  let t = t0;
+  const syllables = 3 + Math.floor(Math.random() * 8);
+  for (let i = 0; i < syllables; i++) {
+    const dur = 0.1 + Math.random() * 0.16;
+    const o = actx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(f0 * (0.92 + Math.random() * 0.25), t);
+    o.frequency.linearRampToValueAtTime(f0 * (0.85 + Math.random() * 0.3), t + dur);
+    const g = actx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(1, t + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g).connect(master);
+    o.start(t); o.stop(t + dur + 0.05);
+    t += dur + 0.02 + Math.random() * 0.09;
+  }
+}
+function glassClink() {
+  const t0 = actx.currentTime;
+  const pan = panTo((Math.random() * 2 - 1) * 0.7);
+  const hits = 1 + Math.floor(Math.random() * 2);
+  for (let i = 0; i < hits; i++) {
+    const o = actx.createOscillator();
+    o.type = 'sine';
+    o.frequency.value = 1800 + Math.random() * 1500;
+    const g = actx.createGain();
+    const t = t0 + i * (0.07 + Math.random() * 0.12);
+    g.gain.setValueAtTime(0.05, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+    o.connect(g).connect(pan);
+    o.start(t); o.stop(t + 0.3);
+  }
+}
+function seatbeltChime() {
+  const t0 = actx.currentTime;
+  for (const [note, at] of [[988, 0], [784, 0.4]]) { // the classic bing-bong
+    const o = actx.createOscillator(); o.type = 'sine'; o.frequency.value = note;
+    const g = actx.createGain();
+    g.gain.setValueAtTime(0.07, t0 + at);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 1.3);
+    o.connect(g).connect(ambGain);
+    o.start(t0 + at); o.stop(t0 + at + 1.4);
+  }
+}
+function cough() {
+  const t0 = actx.currentTime;
+  const pan = panTo((Math.random() * 2 - 1) * 0.8);
+  const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 650;
+  lp.connect(pan);
+  const bursts = 1 + Math.floor(Math.random() * 2);
+  for (let i = 0; i < bursts; i++) {
+    const src = actx.createBufferSource();
+    src.buffer = noiseBuffer(0.2);
+    const g = actx.createGain();
+    const t = t0 + i * 0.27;
+    g.gain.setValueAtTime(0.1, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+    src.connect(g).connect(lp);
+    src.start(t);
+  }
+}
+
 function blip(freq, dur = 0.08, gain = 0.15) {
   try {
     audio();
@@ -140,62 +257,85 @@ scene.add(sun);
 
 const colliders = [];
 const box = (minX, maxX, minZ, maxZ) => colliders.push({ minX, maxX, minZ, maxZ });
+const circle = (cx, cz, r) => { const c = { cx, cz, r }; colliders.push(c); return c; };
 
-// ---- Fuselage ---------------------------------------------------------------
+// ---- Wide-body fuselage (twin aisle, 3-4-3) -----------------------------------
 {
   const len = CABIN_BACK - COCKPIT_BACK + 4;
+  const midZ = (CABIN_BACK + COCKPIT_BACK) / 2;
   const tube = new THREE.Mesh(
-    new THREE.CylinderGeometry(3.2, 3.2, len, 14, 1, true),
+    new THREE.CylinderGeometry(5.3, 5.3, len, 18, 1, true),
     new THREE.MeshStandardMaterial({ color: 0xd8dde6, side: THREE.BackSide, roughness: 0.9, flatShading: true })
   );
   tube.rotation.x = Math.PI / 2;
-  tube.position.set(0, 1.2, (CABIN_BACK + COCKPIT_BACK) / 2);
+  tube.position.set(0, 1.6, midZ);
   scene.add(tube);
 
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(5.6, len),
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(10.4, len),
     new THREE.MeshStandardMaterial({ color: 0x2e3340, roughness: 0.95 }));
   floor.rotation.x = -Math.PI / 2;
-  floor.position.set(0, 0.001, (CABIN_BACK + COCKPIT_BACK) / 2);
+  floor.position.set(0, 0.001, midZ);
   scene.add(floor);
 
-  const carpet = new THREE.Mesh(new THREE.PlaneGeometry(1.0, CABIN_BACK - CABIN_FRONT),
-    new THREE.MeshStandardMaterial({ color: 0x44506e, roughness: 1 }));
-  carpet.rotation.x = -Math.PI / 2;
-  carpet.position.set(0, 0.005, (CABIN_BACK + CABIN_FRONT) / 2);
-  scene.add(carpet);
+  // Twin aisle carpets + cross-walkway + galley bands
+  const carpetMat = new THREE.MeshStandardMaterial({ color: 0x44506e, roughness: 1 });
+  for (const side of [-1, 1]) {
+    const carpet = new THREE.Mesh(new THREE.PlaneGeometry(1.1, CABIN_BACK - CABIN_FRONT), carpetMat);
+    carpet.rotation.x = -Math.PI / 2;
+    carpet.position.set(side * L.AISLE_X, 0.005, (CABIN_BACK + CABIN_FRONT) / 2);
+    scene.add(carpet);
+  }
+  for (const [cz, depth] of [[L.CROSS_Z, 3.2], [CABIN_FRONT + 1.7, 3.0], [CABIN_BACK - 1.7, 3.0]]) {
+    const band = new THREE.Mesh(new THREE.PlaneGeometry(9.4, depth), carpetMat);
+    band.rotation.x = -Math.PI / 2;
+    band.position.set(0, 0.004, cz);
+    scene.add(band);
+  }
 
+  // Windows, side bins, center bins, cabin lights
   const winMat = new THREE.MeshBasicMaterial({ color: 0x87b8e8 });
   const binMat = new THREE.MeshStandardMaterial({ color: 0xbfc6d2, roughness: 0.7, flatShading: true });
   for (const side of [-1, 1]) {
-    const bin = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.5, CABIN_BACK - CABIN_FRONT), binMat);
-    bin.position.set(side * 1.9, 2.45, (CABIN_BACK + CABIN_FRONT) / 2);
-    bin.rotation.z = side * 0.35;
+    const bin = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, CABIN_BACK - CABIN_FRONT), binMat);
+    bin.position.set(side * 3.6, 2.7, (CABIN_BACK + CABIN_FRONT) / 2);
+    bin.rotation.z = side * 0.3;
     scene.add(bin);
     for (let r = 0; r < ROWS; r++) {
-      const w = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.45), winMat);
-      w.position.set(side * 2.92, 1.55, rowZ(r));
+      const w = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.5), winMat);
+      w.position.set(side * 5.0, 1.7, rowZ(r));
       w.rotation.y = side * -Math.PI / 2;
       scene.add(w);
     }
   }
+  const cbin = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.5, CABIN_BACK - CABIN_FRONT), binMat);
+  cbin.position.set(0, 3.05, (CABIN_BACK + CABIN_FRONT) / 2);
+  scene.add(cbin);
   const stripMat = new THREE.MeshBasicMaterial({ color: 0xfff7e0 });
   for (let z = CABIN_FRONT + 2; z < CABIN_BACK; z += 4) {
-    const s = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 1.6), stripMat);
-    s.position.set(0, 2.78, z);
-    s.rotation.x = Math.PI / 2;
-    scene.add(s);
+    for (const side of [-1, 1]) {
+      const s = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 1.6), stripMat);
+      s.position.set(side * L.AISLE_X, 3.0, z);
+      s.rotation.x = Math.PI / 2;
+      scene.add(s);
+    }
   }
 
+  // Rear galley wall, front bulkhead with center cockpit door gap
   const wallMat = new THREE.MeshStandardMaterial({ color: 0xcdd3dd });
-  const back = new THREE.Mesh(new THREE.BoxGeometry(6.4, 3.4, 0.2), wallMat);
-  back.position.set(0, 1.5, CABIN_BACK + 0.1);
+  const back = new THREE.Mesh(new THREE.BoxGeometry(10.8, 4.2, 0.2), wallMat);
+  back.position.set(0, 1.8, CABIN_BACK + 0.1);
   scene.add(back);
-  box(-3.2, 3.2, CABIN_BACK, CABIN_BACK + 1);
+  box(-5.4, 5.4, CABIN_BACK, CABIN_BACK + 1);
+  // rear galley counter with coffee pots
+  const counter = new THREE.Mesh(new THREE.BoxGeometry(4, 1, 0.6), new THREE.MeshStandardMaterial({ color: 0x9aa3b0 }));
+  counter.position.set(0, 0.5, CABIN_BACK - 0.4);
+  scene.add(counter);
+  box(-2, 2, CABIN_BACK - 0.7, CABIN_BACK - 0.1);
   for (const side of [-1, 1]) {
-    const bh = new THREE.Mesh(new THREE.BoxGeometry(2.4, 3.4, 0.2), wallMat);
-    bh.position.set(side * 1.75, 1.5, CABIN_FRONT);
+    const bh = new THREE.Mesh(new THREE.BoxGeometry(4.7, 4.2, 0.2), wallMat);
+    bh.position.set(side * 2.95, 1.8, CABIN_FRONT);
     scene.add(bh);
-    box(side === -1 ? -3.2 : 0.55, side === -1 ? -0.55 : 3.2, CABIN_FRONT - 0.15, CABIN_FRONT + 0.15);
+    box(side === -1 ? -5.4 : 0.55, side === -1 ? -0.55 : 5.4, CABIN_FRONT - 0.15, CABIN_FRONT + 0.15);
   }
   const cnv = document.createElement('canvas'); cnv.width = 128; cnv.height = 32;
   const c2 = cnv.getContext('2d');
@@ -211,26 +351,30 @@ const box = (minX, maxX, minZ, maxZ) => colliders.push({ minX, maxX, minZ, maxZ 
 
 // ---- Cockpit ------------------------------------------------------------------
 {
-  const dash = new THREE.Mesh(new THREE.BoxGeometry(4, 1, 1), new THREE.MeshStandardMaterial({ color: 0x222833 }));
+  const dash = new THREE.Mesh(new THREE.BoxGeometry(7, 1, 1), new THREE.MeshStandardMaterial({ color: 0x222833 }));
   dash.position.set(0, 0.9, COCKPIT_BACK + 0.7);
   scene.add(dash);
-  box(-2, 2, COCKPIT_BACK, COCKPIT_BACK + 1.3);
+  box(-3.5, 3.5, COCKPIT_BACK, COCKPIT_BACK + 1.3);
   const screenMat = new THREE.MeshBasicMaterial({ color: 0x2bd96a });
-  for (let i = -1; i <= 1; i++) {
+  for (let i = -2; i <= 2; i++) {
     const s = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.35), screenMat);
     s.position.set(i * 0.9, 1.25, COCKPIT_BACK + 1.22);
     scene.add(s);
   }
   const seatMat = new THREE.MeshStandardMaterial({ color: 0x4a2c1a });
-  for (const x of [-0.8, 0.8]) {
+  for (const x of [-0.9, 0.9]) {
     const s = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.2, 0.7), seatMat);
-    s.position.set(x, 0.6, COCKPIT_BACK + 2);
+    s.position.set(x, 0.6, COCKPIT_BACK + 2.2);
     scene.add(s);
-    box(x - 0.35, x + 0.35, COCKPIT_BACK + 1.65, COCKPIT_BACK + 2.35);
+    box(x - 0.35, x + 0.35, COCKPIT_BACK + 1.85, COCKPIT_BACK + 2.55);
   }
-  const ws = new THREE.Mesh(new THREE.PlaneGeometry(4.5, 1.4), new THREE.MeshBasicMaterial({ color: 0x0c1f3d }));
-  ws.position.set(0, 1.9, COCKPIT_BACK + 0.05);
+  const ws = new THREE.Mesh(new THREE.PlaneGeometry(7, 1.5), new THREE.MeshBasicMaterial({ color: 0x0c1f3d }));
+  ws.position.set(0, 2.0, COCKPIT_BACK + 0.05);
   scene.add(ws);
+  // cockpit side walls (the fuselage is wider than the cockpit room)
+  for (const side of [-1, 1]) {
+    box(side === -1 ? -5.4 : 3.6, side === -1 ? -3.6 : 5.4, COCKPIT_BACK, CABIN_FRONT);
+  }
 }
 
 // ---- Cockpit door ---------------------------------------------------------------
@@ -267,16 +411,19 @@ const seatGeoBack = new THREE.BoxGeometry(0.62, 0.85, 0.16);
 const seatMatA = new THREE.MeshStandardMaterial({ color: 0x27497a, roughness: 0.9 });
 const seatMatB = new THREE.MeshStandardMaterial({ color: 0x2d5a8e, roughness: 0.9 });
 for (let r = 0; r < ROWS; r++) {
-  for (const x of SEAT_XS) {
-    const m = (r + SEAT_XS.indexOf(x)) % 2 ? seatMatA : seatMatB;
-    const base = new THREE.Mesh(seatGeoBase, m);
-    base.position.set(x, 0.28, rowZ(r));
-    const bk = new THREE.Mesh(seatGeoBack, m);
-    bk.position.set(x, 0.85, rowZ(r) + 0.28);
-    scene.add(base, bk);
+  if (L.CROSS_ROWS.includes(r)) continue; // open cross-walkway
+  let si = 0;
+  for (const block of L.BLOCKS) {
+    for (const x of block) {
+      const m = (r + si++) % 2 ? seatMatA : seatMatB;
+      const base = new THREE.Mesh(seatGeoBase, m);
+      base.position.set(x, 0.28, rowZ(r));
+      const bk = new THREE.Mesh(seatGeoBack, m);
+      bk.position.set(x, 0.85, rowZ(r) + 0.28);
+      scene.add(base, bk);
+    }
+    box(block[0] - 0.35, block[block.length - 1] + 0.35, rowZ(r) - 0.32, rowZ(r) + 0.38);
   }
-  box(-2.55, -0.5, rowZ(r) - 0.32, rowZ(r) + 0.38);
-  box(0.5, 2.55, rowZ(r) - 0.32, rowZ(r) + 0.38);
 }
 
 // ===========================================================================
@@ -296,7 +443,7 @@ function tagSprite(text, color = '#fff', w = 1.7, h = 0.42) {
   return sp;
 }
 
-function makePerson(color, name) {
+function makePerson(color, name, lite = false) {
   const g = new THREE.Group();
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.85, 0.26),
     new THREE.MeshStandardMaterial({ color, roughness: 0.85, flatShading: true }));
@@ -316,14 +463,18 @@ function makePerson(color, name) {
     tag.position.y = 1.9;
     g.add(tag);
   }
-  const badge = tagSprite('CLEAN', '#7dffa8', 1.0, 0.28);
-  badge.position.y = 2.16;
-  badge.visible = false;
-  const cuff = tagSprite('RESTRAINED', '#ff7a7a', 1.4, 0.3);
-  cuff.position.y = 1.0;
-  cuff.visible = false;
-  g.add(badge, cuff);
-  g.userData = { body, head, badge, cuff, seatedPose: false };
+  if (!lite) {
+    const badge = tagSprite('CLEAN', '#7dffa8', 1.0, 0.28);
+    badge.position.y = 2.16;
+    badge.visible = false;
+    const cuff = tagSprite('RESTRAINED', '#ff7a7a', 1.4, 0.3);
+    cuff.position.y = 1.0;
+    cuff.visible = false;
+    g.add(badge, cuff);
+    g.userData = { body, head, badge, cuff, seatedPose: false };
+  } else {
+    g.userData = { body, head, seatedPose: false };
+  }
   return g;
 }
 
@@ -335,27 +486,31 @@ function setPose(g, seated) {
   g.userData.body.scale.y = seated ? 0.72 : 1;
 }
 
-// NPC decoys in the window/inner seats (players get the ±1.5 seats)
+// NPC decoys fill the seats players don't use. The list is deterministic and
+// shared with the host (logic.js), so the host can puppet some of them
+// ("extras") who stand up and wander the cabin — perfect cover for the Evil.
 const NPC_COLORS = [0x8d6e63, 0x78909c, 0x6d8b74, 0xa1887f, 0x607d8b, 0x9575cd, 0xbcaaa4, 0x4db6ac];
-const NPC_NAMES = ['Gary', 'Linda', 'Trevor', 'Pam', 'Dale', 'Ruth', 'Kevin', 'Marge', 'Stan', 'Carol', 'Bert', 'Nadine'];
-let npcSeed = 0;
-for (let r = 0; r < ROWS; r++) {
-  for (const x of [-2.2, -0.8, 0.8, 2.2]) {
-    if (Math.sin(r * 7.13 + x * 3.7) > -0.35) {
-      const npc = makePerson(NPC_COLORS[npcSeed % NPC_COLORS.length], NPC_NAMES[npcSeed % NPC_NAMES.length]);
-      npcSeed++;
-      npc.position.set(x, 0, rowZ(r));
-      npc.rotation.y = Math.PI;
-      setPose(npc, true);
-      scene.add(npc);
-    }
+const NPC_NAMES = ['Gary', 'Linda', 'Trevor', 'Pam', 'Dale', 'Ruth', 'Kevin', 'Marge', 'Bert', 'Nadine', 'Hank', 'Lois'];
+const npcGroups = [];
+{
+  const seats = npcSeatList();
+  for (let i = 0; i < seats.length; i++) {
+    const s = seats[i];
+    const npc = makePerson(NPC_COLORS[i % NPC_COLORS.length], NPC_NAMES[i % NPC_NAMES.length], true);
+    npc.position.set(s.x, 0, s.z);
+    npc.rotation.y = Math.PI;
+    setPose(npc, true);
+    scene.add(npc);
+    npcGroups.push({ g: npc, seat: s, target: null }); // target set by snap for extras
   }
 }
 
-// Flight attendants + carts
+// Flight attendants + carts (two per aisle). Positions are lerped toward the
+// host's snapshots so they glide instead of stuttering, and both the body and
+// the cart are solid.
 const attendantObjs = [];
-for (const name of ['Brenda', 'Doug']) {
-  const g = makePerson(0xf2f4f7, name);
+for (const [name, ax] of [['Brenda', -L.AISLE_X], ['Doug', -L.AISLE_X], ['Carol', L.AISLE_X], ['Stan', L.AISLE_X]]) {
+  const g = makePerson(0xf2f4f7, name, true);
   scene.add(g);
   const cart = new THREE.Group();
   const cbody = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.9, 0.85),
@@ -373,9 +528,10 @@ for (const name of ['Brenda', 'Doug']) {
   peanuts.position.set(0, 0.95, 0.25);
   cart.add(peanuts);
   scene.add(cart);
-  const collider = { minX: 0, maxX: 0, minZ: 0, maxZ: 0 };
-  colliders.push(collider);
-  attendantObjs.push({ g, cart, collider, z: 0, dir: 1 });
+  const cartCollider = { minX: 0, maxX: 0, minZ: 0, maxZ: 0 };
+  colliders.push(cartCollider);
+  const bodyCollider = circle(ax, 0, 0.36);
+  attendantObjs.push({ g, cart, cartCollider, bodyCollider, x: ax, z: 0, dir: 1, cx: ax, cz: 0 });
 }
 
 // ===========================================================================
@@ -577,9 +733,16 @@ function onMsg(m) {
         const r = remotes.get(p.id);
         if (r) r.target = { x: p.pos.x, z: p.pos.z, ry: p.ry, seated: p.seated, restrained: p.restrained };
       }
-      for (let i = 0; i < m.attendants.length; i++) {
+      for (let i = 0; i < m.attendants.length && i < attendantObjs.length; i++) {
+        attendantObjs[i].x = m.attendants[i].x ?? attendantObjs[i].x;
         attendantObjs[i].z = m.attendants[i].z;
         attendantObjs[i].dir = m.attendants[i].dir;
+      }
+      if (m.extras) {
+        for (const e of m.extras) {
+          const n = npcGroups[e.i];
+          if (n) n.target = { x: e.x, z: e.z, seated: !!e.s };
+        }
       }
       if (m.doorOpen && !doorOpen) openDoor();
       commotion = m.commotion;
@@ -588,13 +751,11 @@ function onMsg(m) {
     }
     case 'msg': feed(m.text, m.kind); break;
     case 'serve': {
-      const row = Math.max(1, Math.round((m.z + 20) / 2.2) + 1);
-      feed(`${m.name} (row ${row}): “${m.text}”`, 'serve');
+      feed(`${m.name} (row ${rowOfZ(m.z)}): “${m.text}”`, 'serve');
       break;
     }
     case 'clink': {
-      const row = Math.max(1, Math.round((m.z + 20) / 2.2) + 1);
-      feed(`You hear a faint metallic *clink* near row ${row}...`, 'sus');
+      feed(`You hear a faint metallic *clink* near row ${rowOfZ(m.z)}...`, 'sus');
       blip(2200, 0.06, 0.12);
       break;
     }
@@ -771,10 +932,15 @@ function pollGamepad(dt) {
 }
 
 // --- Actions -------------------------------------------------------------------
-function nearMySeat() { return mySeat && Math.abs(me.x - mySeat.x) < 0.9 && Math.abs(me.z - rowZ(mySeat.row)) < 0.9; }
+function nearMySeat() { return mySeat && Math.abs(me.x - mySeat.x) < 1.1 && Math.abs(me.z - rowZ(mySeat.row)) < 1.1; }
 function inDoorZone() { return Math.abs(me.x) < 1.2 && Math.abs(me.z - C.DOOR_ZONE.z) < C.DOOR_ZONE.radius; }
 function onUse() {
-  if (seated) { seated = false; me.x = mySeat.x > 0 ? 0.2 : -0.2; me.z = rowZ(mySeat.row) + 0.85; return; }
+  if (seated) {
+    seated = false;
+    me.x = L.AISLE_X * (mySeat.x >= 0 ? 1 : -1);
+    me.z = rowZ(mySeat.row) + 0.85;
+    return;
+  }
   if (nearMySeat()) { seated = true; me.x = mySeat.x; me.z = rowZ(mySeat.row); yaw = Math.PI; return; }
   if (!doorOpen && inDoorZone()) {
     lockpicking = true;
@@ -819,6 +985,18 @@ function tryRestrain() {
 // ===========================================================================
 function collide(x, z) {
   for (const c of colliders) {
+    if (c.r !== undefined) {
+      // round collider (people): smooth radial push-out, no snagging
+      const dx = x - c.cx, dz = z - c.cz;
+      const min = c.r + RADIUS;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < min * min) {
+        const d = Math.sqrt(d2) || 0.001;
+        x = c.cx + (dx / d) * min;
+        z = c.cz + (dz / d) * min;
+      }
+      continue;
+    }
     const cx = Math.max(c.minX, Math.min(x, c.maxX));
     const cz = Math.max(c.minZ, Math.min(z, c.maxZ));
     const dx = x - cx, dz = z - cz;
@@ -831,7 +1009,7 @@ function collide(x, z) {
       } else z = c.maxZ + RADIUS;
     }
   }
-  x = Math.max(-2.55, Math.min(2.55, x));
+  x = Math.max(-L.HALF_W, Math.min(L.HALF_W, x));
   z = Math.max(COCKPIT_BACK + 0.4, Math.min(CABIN_BACK - 0.4, z));
   return [x, z];
 }
@@ -884,12 +1062,32 @@ function loop(t) {
   }
 
   for (const a of attendantObjs) {
-    a.g.position.set(0, 0, a.z);
+    // glide toward the host's position instead of snapping (no more bumpy hits)
+    a.cx += (a.x - a.cx) * Math.min(1, dt * 8);
+    a.cz += (a.z - a.cz) * Math.min(1, dt * 8);
+    a.g.position.set(a.cx, 0, a.cz);
     a.g.rotation.y = a.dir > 0 ? 0 : Math.PI;
-    const cz = a.z + a.dir * 0.85;
-    a.cart.position.set(0, 0, cz);
-    a.collider.minX = -0.34; a.collider.maxX = 0.34;
-    a.collider.minZ = cz - 0.5; a.collider.maxZ = cz + 0.5;
+    const cz = a.cz + a.dir * 0.85;
+    a.cart.position.set(a.cx, 0, cz);
+    a.bodyCollider.cx = a.cx; a.bodyCollider.cz = a.cz;
+    a.cartCollider.minX = a.cx - 0.34; a.cartCollider.maxX = a.cx + 0.34;
+    a.cartCollider.minZ = cz - 0.5; a.cartCollider.maxZ = cz + 0.5;
+  }
+
+  // Wandering NPC extras drift toward the host's snapshots
+  for (const n of npcGroups) {
+    if (!n.target) continue;
+    const g = n.g, t2 = n.target;
+    const dx = t2.x - g.position.x, dz = t2.z - g.position.z;
+    g.position.x += dx * Math.min(1, dt * 8);
+    g.position.z += dz * Math.min(1, dt * 8);
+    if (!t2.seated && (dx * dx + dz * dz) > 0.01) {
+      const want = Math.atan2(-dx, -dz);
+      let dr = want - g.rotation.y;
+      dr = ((dr + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+      g.rotation.y += dr * Math.min(1, dt * 8);
+    } else if (t2.seated) g.rotation.y = Math.PI;
+    setPose(g, t2.seated);
   }
 
   if (doorRattleT > 0 && !doorOpen) {
