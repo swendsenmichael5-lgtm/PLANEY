@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PLANEY — Knife in a Sandal</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; font-family: 'Segoe UI', system-ui, sans-serif; background: #000; color: #eee; }
+  canvas { display: block; }
+  #hud { position: fixed; inset: 0; pointer-events: none; }
+
+  #crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,.8); }
+
+  #roleCard { position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+    padding: 8px 22px; border-radius: 10px; font-weight: 700; letter-spacing: 1px; font-size: 15px;
+    background: rgba(0,0,0,.6); border: 1px solid #444; display: none; }
+  #roleCard.evil { color: #ff5a5a; border-color: #ff5a5a; box-shadow: 0 0 18px rgba(255,0,0,.35); }
+  #roleCard.crew { color: #6fd3ff; border-color: #6fd3ff; }
+
+  #timer { position: absolute; top: 14px; right: 18px; font-size: 22px; font-weight: 700;
+    background: rgba(0,0,0,.55); padding: 6px 14px; border-radius: 8px; border: 1px solid #333; }
+
+  #prompt { position: absolute; left: 50%; bottom: 18%; transform: translateX(-50%);
+    background: rgba(0,0,0,.65); padding: 8px 18px; border-radius: 8px; font-size: 15px; display: none;
+    border: 1px solid #555; }
+
+  #progressWrap { position: absolute; left: 50%; bottom: 26%; transform: translateX(-50%);
+    width: 280px; height: 14px; background: rgba(0,0,0,.6); border: 1px solid #777; border-radius: 7px; display: none; }
+  #progressBar { height: 100%; width: 0%; background: linear-gradient(90deg,#ffae00,#ff5a5a); border-radius: 7px; }
+  #progressLabel { position: absolute; width: 100%; text-align: center; top: -22px; font-size: 13px; }
+
+  #feed { position: absolute; left: 14px; top: 14px; width: 360px; font-size: 13px; }
+  #feed div { background: rgba(0,0,0,.55); margin-bottom: 4px; padding: 5px 10px; border-radius: 6px;
+    border-left: 3px solid #888; animation: fadein .2s; }
+  #feed .alert { border-left-color: #ff3b3b; color: #ffb3b3; font-weight: 700; }
+  #feed .sus { border-left-color: #ffae00; color: #ffd98a; }
+  #feed .err { border-left-color: #888; color: #aaa; }
+  #feed .serve { border-left-color: #6fd3ff; color: #bfe9ff; font-style: italic; }
+  @keyframes fadein { from { opacity: 0; transform: translateX(-8px);} to { opacity: 1; } }
+
+  #chatBox { position: absolute; left: 14px; bottom: 14px; width: 360px; pointer-events: auto; }
+  #chatLog { max-height: 150px; overflow-y: auto; font-size: 13px; margin-bottom: 4px; }
+  #chatLog div { background: rgba(0,0,0,.5); padding: 3px 8px; border-radius: 5px; margin-top: 2px; }
+  #chatInput { width: 100%; padding: 7px 10px; border-radius: 6px; border: 1px solid #555;
+    background: rgba(0,0,0,.7); color: #fff; font-size: 14px; outline: none; display: none; }
+
+  #stunOverlay { position: absolute; inset: 0; background: rgba(120,0,0,.25); display: none;
+    align-items: center; justify-content: center; font-size: 26px; font-weight: 700; color: #ffd0d0; }
+
+  .screen { position: fixed; inset: 0; background: radial-gradient(ellipse at center, #16213a 0%, #05080f 100%);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; z-index: 10; }
+  .screen h1 { font-size: 52px; letter-spacing: 6px; color: #6fd3ff; text-shadow: 0 0 30px rgba(111,211,255,.4); }
+  .screen h1 span { color: #ff5a5a; }
+  .screen p { color: #9fb3c8; max-width: 560px; text-align: center; line-height: 1.5; }
+  .screen input { padding: 12px 16px; font-size: 18px; border-radius: 8px; border: 1px solid #456;
+    background: #0c1422; color: #fff; text-align: center; outline: none; width: 280px; }
+  .screen button { padding: 12px 34px; font-size: 18px; font-weight: 700; border-radius: 8px; border: none;
+    background: #6fd3ff; color: #03263b; cursor: pointer; }
+  .screen button:hover { background: #9ce2ff; }
+  .screen button:disabled { background: #345; color: #789; cursor: default; }
+  #lobbyList { color: #cfe7ff; font-size: 15px; text-align: center; line-height: 1.7; }
+  #gameOverScreen { display: none; }
+  #gameOverScreen h1 { font-size: 44px; }
+  .keys { font-size: 13px; color: #6e859e; }
+  .keys b { color: #cfe7ff; }
+</style>
+</head>
+<body>
+<div id="joinScreen" class="screen">
+  <h1>PLANE<span>Y</span></h1>
+  <p>Somewhere over the Atlantic. Everyone is wearing sandals. One passenger has a <b style="color:#ff5a5a">knife</b> in theirs,
+     and they want the cockpit. Find them before they get there — or, if it's you... act natural.</p>
+  <input id="nameInput" maxlength="16" placeholder="Your name" autocomplete="off">
+  <button id="joinBtn">Board the plane</button>
+  <p class="keys"><b>WASD</b> move · <b>Mouse</b> look · <b>Shift</b> hurry (risky) · <b>E</b> sit / use door ·
+     <b>F</b> inspect sandals · <b>G</b> show your sandals · <b>Q</b> ??? · <b>Enter</b> chat</p>
+</div>
+
+<div id="lobbyScreen" class="screen" style="display:none">
+  <h1>BOARDING</h1>
+  <div id="lobbyList"></div>
+  <button id="startBtn" style="display:none">Take off</button>
+  <p id="lobbyWait" class="keys">Waiting for the host to start...</p>
+</div>
+
+<div id="gameOverScreen" class="screen">
+  <h1 id="goTitle"></h1>
+  <p id="goReason"></p>
+  <p class="keys">Returning to the gate for another flight...</p>
+</div>
+
+<div id="hud">
+  <div id="crosshair"></div>
+  <div id="roleCard"></div>
+  <div id="timer"></div>
+  <div id="prompt"></div>
+  <div id="progressWrap"><div id="progressLabel"></div><div id="progressBar"></div></div>
+  <div id="feed"></div>
+  <div id="stunOverlay">Apologizing profusely...</div>
+  <div id="chatBox"><div id="chatLog"></div><input id="chatInput" maxlength="140" placeholder="Accuse someone... (Enter to send, Esc to close)"></div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script type="importmap">{ "imports": { "three": "/vendor/three/three.module.js" } }</script>
+<script type="module" src="/game.js"></script>
+</body>
+</html>

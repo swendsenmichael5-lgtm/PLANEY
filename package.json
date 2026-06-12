@@ -1,0 +1,21 @@
+{
+  "name": "planey",
+  "version": "0.1.0",
+  "description": "First-person social deduction on a plane: find the knife in the sandal before the Evil reaches the cockpit.",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "http://local_proxy@127.0.0.1:37565/git/swendsenmichael5-lgtm/PLANEY"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^5.2.1",
+    "socket.io": "^4.8.3",
+    "three": "^0.184.0"
+  }
+}
