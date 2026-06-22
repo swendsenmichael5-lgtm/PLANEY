@@ -63,7 +63,8 @@ function showIntro(evil) {
     pxTitle($('introTitle'), [['YOU ARE THE EVIL', '#ff5a5a']], 5);
     $('introText').innerHTML =
       'You are the evil <b style="color:#ff5a5a">knife-sandal person</b>. There is a knife hidden in your sandal. ' +
-      'Bide your time, blend in with the passengers, then get to the cockpit door, pick the lock ' +
+      'Bide your time and blend in — you can sit in <b>any empty seat</b> (<b>E / 🎮 A</b>) to look like an ' +
+      'ordinary passenger and hop your way forward. Then reach the cockpit door, pick the lock ' +
       '(<b>hold E / 🎮 A</b>), slip inside, and pull your knife (<b>Q / 🎮 RB</b>). Don’t get caught.';
   } else {
     pxTitle($('introTitle'), [['JUST FLYING HOME', '#7dffa8']], 5);
@@ -729,8 +730,9 @@ function onMsg(m) {
         hideIntro();
         $('gameOverScreen').style.display = 'none';
         $('lobbyScreen').style.display = 'flex';
+        if (isTouch) $('touchUI').style.display = 'none';
         $('roleCard').style.display = 'none';
-        isEvil = false; seated = true; commotion = false;
+        isEvil = false; seated = true; commotion = false; sittingSeat = null;
         stunnedUntil = restrainedUntil = restrainCooldownUntil = 0;
         $('stunOverlay').style.display = 'none';
         if (mySeat) { me.x = mySeat.x; me.z = rowZ(mySeat.row); }
@@ -763,7 +765,7 @@ function onMsg(m) {
     case 'started': {
       endsAt = Date.now() + m.timeLeft;
       phase = 'playing';
-      seated = true; commotion = false;
+      seated = true; commotion = false; sittingSeat = null;
       stunnedUntil = restrainedUntil = restrainCooldownUntil = 0;
       me.x = mySeat.x; me.z = rowZ(mySeat.row);
       closeDoor();
@@ -887,6 +889,7 @@ function onMsg(m) {
       $('stunOverlay').style.display = 'none';
       $('commotion').style.display = 'none';
       hideIntro();
+      if (isTouch) $('touchUI').style.display = 'none';
       $('gameOverScreen').style.display = 'flex';
       pxTitle($('goTitle'), m.winner === 'evil'
         ? [['THE EVIL WINS', '#ff5a5a']]
@@ -906,10 +909,14 @@ function onMsg(m) {
   }
 }
 
+const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+function lockPointer() { if (!isTouch) { try { renderer.domElement.requestPointerLock(); } catch {} } }
+
 function enterGame() {
   $('lobbyScreen').style.display = 'none';
   $('gameOverScreen').style.display = 'none';
-  renderer.domElement.requestPointerLock();
+  lockPointer();
+  if (isTouch) $('touchUI').style.display = 'block';
 }
 
 // ===========================================================================
@@ -944,17 +951,84 @@ addEventListener('keyup', (e) => {
   if (e.code === 'KeyE' && lockpicking) stopLockpick();
 });
 function blocked() { return Date.now() < stunnedUntil || Date.now() < restrainedUntil; }
-function openChat() { chatOpen = true; chatInput.style.display = 'block'; document.exitPointerLock(); chatInput.focus(); }
-function closeChat() { chatOpen = false; chatInput.style.display = 'none'; chatInput.blur(); if (phase === 'playing') renderer.domElement.requestPointerLock(); }
+function openChat() { chatOpen = true; chatInput.style.display = 'block'; document.exitPointerLock(); if (isTouch) $('touchUI').style.display = 'none'; chatInput.focus(); }
+function closeChat() { chatOpen = false; chatInput.style.display = 'none'; chatInput.blur(); if (isTouch && phase === 'playing') $('touchUI').style.display = 'block'; if (phase === 'playing') lockPointer(); }
 
 renderer.domElement.addEventListener('click', () => {
-  if (phase === 'playing' && !chatOpen) renderer.domElement.requestPointerLock();
+  if (phase === 'playing' && !chatOpen) lockPointer();
 });
 addEventListener('mousemove', (e) => {
   if (document.pointerLockElement !== renderer.domElement) return;
   yaw -= e.movementX * 0.0023;
   pitch = Math.max(-1.45, Math.min(1.45, pitch - e.movementY * 0.0023));
 });
+
+// --- Touch controls: left half = move joystick, right half = drag-look, ----
+// plus on-screen action buttons. Built only on touch devices.
+let touchMove = { x: 0, y: 0 }, touchSprint = false;
+const touches = {}; // identifier -> { kind, ox, oy, lx, ly }
+if (isTouch) {
+  const layer = $('touchLayer');
+  const knob = $('joyKnob'), base = $('joyBase');
+  const onStart = (e) => {
+    audio();
+    const hasMove = Object.values(touches).some((v) => v.kind === 'move');
+    for (const t of e.changedTouches) {
+      const leftHalf = t.clientX < innerWidth * 0.5;
+      if (leftHalf && !hasMove) {
+        touches[t.identifier] = { kind: 'move', ox: t.clientX, oy: t.clientY };
+        base.style.display = knob.style.display = 'block';
+        base.style.left = `${t.clientX}px`; base.style.top = `${t.clientY}px`;
+        knob.style.left = `${t.clientX}px`; knob.style.top = `${t.clientY}px`;
+      } else {
+        touches[t.identifier] = { kind: 'look', lx: t.clientX, ly: t.clientY };
+      }
+    }
+  };
+  const onMove = (e) => {
+    for (const t of e.changedTouches) {
+      const info = touches[t.identifier];
+      if (!info) continue;
+      if (info.kind === 'move') {
+        const dx = t.clientX - info.ox, dy = t.clientY - info.oy;
+        const R = 60, mag = Math.hypot(dx, dy), cl = Math.min(mag, R) || 1;
+        const nx = (dx / (mag || 1)) * (cl / R), ny = (dy / (mag || 1)) * (cl / R);
+        touchMove.x = nx; touchMove.y = ny;
+        touchSprint = mag > R * 0.92;
+        knob.style.left = `${info.ox + nx * R}px`; knob.style.top = `${info.oy + ny * R}px`;
+      } else {
+        yaw -= (t.clientX - info.lx) * 0.006;
+        pitch = Math.max(-1.45, Math.min(1.45, pitch - (t.clientY - info.ly) * 0.006));
+        info.lx = t.clientX; info.ly = t.clientY;
+      }
+    }
+  };
+  const onEnd = (e) => {
+    for (const t of e.changedTouches) {
+      const info = touches[t.identifier];
+      if (info && info.kind === 'move') { touchMove.x = touchMove.y = 0; touchSprint = false; base.style.display = knob.style.display = 'none'; }
+      delete touches[t.identifier];
+    }
+  };
+  layer.addEventListener('touchstart', (e) => { e.preventDefault(); onStart(e); }, { passive: false });
+  layer.addEventListener('touchmove', (e) => { e.preventDefault(); onMove(e); }, { passive: false });
+  layer.addEventListener('touchend', onEnd);
+  layer.addEventListener('touchcancel', onEnd);
+
+  // Action buttons (tap). Each stops propagation so it doesn't drag-look.
+  const bind = (id, fn) => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); audio(); if (phase === 'playing' && !blocked()) fn(); }, { passive: false });
+  };
+  bind('btnUse', () => { onUse(); });
+  $('btnUse').addEventListener('touchend', (e) => { e.preventDefault(); if (lockpicking) stopLockpick(); }, { passive: false });
+  bind('btnInspect', tryInspect);
+  bind('btnRestrain', tryRestrain);
+  bind('btnShow', () => { if (!seated) send({ type: 'show' }); });
+  bind('btnKnife', () => send({ type: 'knife' }));
+  $('btnChat').addEventListener('touchstart', (e) => { e.preventDefault(); e.stopPropagation(); if (phase === 'playing' && !chatOpen) openChat(); }, { passive: false });
+}
 
 // --- Gamepad (Xbox/standard mapping, with fallbacks) -------------------------
 const padPrev = [];
@@ -1017,21 +1091,54 @@ function pollGamepad(dt) {
 }
 
 // --- Actions -------------------------------------------------------------------
-function nearMySeat() { return mySeat && Math.abs(me.x - mySeat.x) < 1.1 && Math.abs(me.z - rowZ(mySeat.row)) < 1.1; }
+// Every seat in the cabin — so anyone (especially the Evil) can change seats
+// mid-cabin and blend in with the seated passengers instead of only using
+// their assigned seat.
+const ALL_SEATS = [];
+for (let r = 0; r < ROWS; r++) {
+  if (L.CROSS_ROWS.includes(r)) continue;
+  for (const block of L.BLOCKS) for (const x of block) ALL_SEATS.push({ x, z: rowZ(r) });
+}
+let sittingSeat = null; // the seat I'm currently in (may differ from mySeat)
+
 function inDoorZone() { return Math.abs(me.x) < 1.2 && Math.abs(me.z - C.DOOR_ZONE.z) < C.DOOR_ZONE.radius; }
+
+// True if a seated NPC or seated remote player already occupies this seat.
+function seatTaken(s) {
+  for (const n of npcGroups) {
+    if ((!n.target || n.target.seated) && Math.abs(n.seat.x - s.x) < 0.3 && Math.abs(n.seat.z - s.z) < 0.5) return true;
+  }
+  for (const r of remotes.values()) {
+    if (r.target.seated && Math.abs(r.target.x - s.x) < 0.3 && Math.abs(r.target.z - s.z) < 0.5) return true;
+  }
+  return false;
+}
+// Nearest empty seat within reach of where I'm standing.
+function nearestSeat() {
+  let best = null, bd = 1.7;
+  for (const s of ALL_SEATS) {
+    const d = Math.hypot(s.x - me.x, s.z - me.z);
+    if (d < bd && !seatTaken(s)) { bd = d; best = s; }
+  }
+  return best;
+}
 function onUse() {
-  if (seated) {
+  if (seated) { // stand up into the aisle beside whichever seat I'm in
     seated = false;
-    me.x = L.AISLE_X * (mySeat.x >= 0 ? 1 : -1);
-    me.z = rowZ(mySeat.row) + 0.85;
+    const seat = sittingSeat || { x: mySeat.x, z: rowZ(mySeat.row) };
+    me.x = L.AISLE_X * (seat.x >= 0 ? 1 : -1);
+    me.z = seat.z + 0.85;
+    sittingSeat = null;
     return;
   }
-  if (nearMySeat()) { seated = true; me.x = mySeat.x; me.z = rowZ(mySeat.row); yaw = Math.PI; return; }
   if (!doorOpen && inDoorZone()) {
     lockpicking = true;
     send({ type: 'lockpick', active: true });
     if (isEvil) setProgress('Picking the cockpit lock...', lockpickProgress);
+    return;
   }
+  const s = nearestSeat(); // sit in any empty seat to blend in
+  if (s) { seated = true; sittingSeat = s; me.x = s.x; me.z = s.z; yaw = Math.PI; }
 }
 function stopLockpick() {
   lockpicking = false;
@@ -1113,16 +1220,17 @@ function loop(t) {
   const playing = phase === 'playing';
 
   if (playing && !seated && !chatOpen && !blocked()) {
-    const sprint = keys['ShiftLeft'] || keys['ShiftRight'] || padSprint;
+    const sprint = keys['ShiftLeft'] || keys['ShiftRight'] || padSprint || touchSprint;
     const sp = (sprint ? SPRINT : WALK) * dt;
     let mx = 0, mz = 0;
     if (keys['KeyW']) { mx -= Math.sin(yaw); mz -= Math.cos(yaw); }
     if (keys['KeyS']) { mx += Math.sin(yaw); mz += Math.cos(yaw); }
     if (keys['KeyA']) { mx -= Math.cos(yaw); mz += Math.sin(yaw); }
     if (keys['KeyD']) { mx += Math.cos(yaw); mz -= Math.sin(yaw); }
-    // gamepad left stick: y = forward/back, x = strafe
-    mx += -Math.sin(yaw) * -padMove.y + Math.cos(yaw) * padMove.x;
-    mz += -Math.cos(yaw) * -padMove.y - Math.sin(yaw) * padMove.x;
+    // gamepad + touch left stick: y = forward/back, x = strafe
+    const stickX = padMove.x + touchMove.x, stickY = padMove.y + touchMove.y;
+    mx += -Math.sin(yaw) * -stickY + Math.cos(yaw) * stickX;
+    mz += -Math.cos(yaw) * -stickY - Math.sin(yaw) * stickX;
     const l = Math.hypot(mx, mz);
     if (l > 0.01) {
       [me.x, me.z] = collide(me.x + (mx / l) * Math.min(1, l) * sp, me.z + (mz / l) * Math.min(1, l) * sp);
@@ -1191,7 +1299,7 @@ function loop(t) {
     else if (!doorOpen && inDoorZone() && !lockpicking)
       setPrompt(isEvil ? '<b>Hold E / A</b> pick the cockpit lock' : '<b>E / A</b> try the cockpit door (locked)');
     else if (doorOpen && me.z < CABIN_FRONT && isEvil) setPrompt('<b>Q / RB</b> pull the knife from your sandal');
-    else if (nearMySeat()) setPrompt('<b>E / A</b> sit down');
+    else if (nearestSeat()) setPrompt('<b>E / A</b> sit down (blend in)');
     else {
       const id = nearestStanding(C.INSPECT_RANGE, false);
       if (id && !inspecting) {

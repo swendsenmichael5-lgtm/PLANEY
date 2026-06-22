@@ -78,7 +78,7 @@
   #padStatus { font-size: 13px; color: #6e859e; }
   #padStatus.on { color: #7dffa8; }
   #introScreen p { font-size: 17px; color: #cfe7ff; max-width: 620px; }
-  #introScreen { background: rgba(4, 8, 16, .92); z-index: 30; }
+  #introScreen { background: rgba(4, 8, 16, .92); z-index: 55; }
   .screen .row { display: flex; gap: 12px; }
   #lobbyList { color: #cfe7ff; font-size: 15px; text-align: center; line-height: 1.8; }
   #shareWrap { display: flex; gap: 8px; align-items: center; }
@@ -87,6 +87,38 @@
     .keys { font-size: 12px; color: #6e859e; max-width: 640px; text-align: center; line-height: 1.7; }
   .keys b { color: #cfe7ff; }
   #netStatus { font-size: 13px; color: #ffae00; }
+
+  /* ---- Touch / mobile controls ---- */
+  html, body { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
+  #touchUI { position: fixed; inset: 0; z-index: 40; display: none; }
+  #touchLayer { position: absolute; inset: 0; }
+  #joyBase, #joyKnob { position: absolute; border-radius: 50%; pointer-events: none; display: none;
+    transform: translate(-50%, -50%); border: 3px solid rgba(159,211,255,.6); }
+  #joyBase { width: 130px; height: 130px; background: rgba(0,0,0,.25); }
+  #joyKnob { width: 60px; height: 60px; background: rgba(159,211,255,.4); }
+  #touchButtons { position: absolute; right: 14px; bottom: 18px; display: grid;
+    grid-template-columns: repeat(2, 78px); gap: 10px; pointer-events: none; }
+  .tbtn { pointer-events: auto; width: 78px; height: 78px; border-radius: 50%;
+    border: 3px solid #03263b; background: rgba(111,211,255,.85); color: #03263b;
+    font-size: 26px; font-weight: 700; font-family: inherit; display: flex;
+    flex-direction: column; align-items: center; justify-content: center; box-shadow: 3px 3px 0 #000; }
+  .tbtn span { font-size: 9px; letter-spacing: 1px; margin-top: 2px; }
+  .tbtn:active { transform: translate(2px,2px); box-shadow: 1px 1px 0 #000; }
+  .tbtn.big { width: 92px; height: 92px; background: #ffd98a; grid-column: span 2; justify-self: center; font-size: 30px; }
+  .tbtn.red { background: rgba(255,90,90,.9); color: #fff; }
+  .tbtn.chat { position: absolute; left: 16px; top: 50%; width: 60px; height: 60px; font-size: 24px; background: rgba(28,44,68,.85); color: #9ce2ff; }
+
+  @media (max-width: 560px) {
+    .screen { gap: 10px; }
+    .screen p { font-size: 14px; }
+    .screen input { width: 84vw; max-width: 320px; }
+    #shareLink { width: 84vw; }
+    .screen .row { flex-direction: column; width: 84vw; }
+    .screen .row button { width: 100%; }
+    #feed { width: 56vw; font-size: 11px; }
+    #chatBox { width: 50vw; }
+    .keys { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -161,6 +193,20 @@
   <div id="feed"></div>
   <div id="stunOverlay"></div>
   <div id="chatBox"><div id="chatLog"></div><input id="chatInput" maxlength="140" placeholder="Accuse someone... (Enter to send, Esc to close)"></div>
+</div>
+
+<div id="touchUI">
+  <div id="touchLayer"></div>
+  <div id="joyBase"></div>
+  <div id="joyKnob"></div>
+  <div id="touchButtons">
+    <button id="btnInspect" class="tbtn">🩴<span>INSPECT</span></button>
+    <button id="btnRestrain" class="tbtn">🤼<span>RESTRAIN</span></button>
+    <button id="btnShow" class="tbtn">👀<span>SHOW</span></button>
+    <button id="btnKnife" class="tbtn red">🔪<span>KNIFE</span></button>
+    <button id="btnUse" class="tbtn big">✋<span>USE</span></button>
+  </div>
+  <button id="btnChat" class="tbtn chat">💬</button>
 </div>
 
 <script type="importmap">{ "imports": { "three": "./vendor/three.module.js" } }</script>

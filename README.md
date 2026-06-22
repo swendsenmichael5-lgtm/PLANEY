@@ -68,13 +68,20 @@ casual "trips to the bathroom".
 |---|---|---|
 | WASD + mouse | Left stick / Right stick | Move / look |
 | Shift | LT or click left stick | Hurry (risky with a knife in your sandal) |
-| E | A | Sit / stand · hold at cockpit door to pick the lock |
 | F | X | Inspect nearest standing player's sandals |
 | R | B | Restrain (tackle + zip-tie) |
 | G | Y | Show everyone your sandals |
 | Q | RB | Pull the knife (cockpit only, Evil only) |
+| E | A | Sit in **any empty seat** (blend in / change seats) · stand · hold at door to pick lock |
 | Enter | — | Cabin chat |
 | — | Start | Take off (host, in lobby) |
+
+## Mobile
+
+Works on phones straight from the same link — no app. A left-thumb virtual
+joystick moves you (push to the edge to hurry), drag the right side to look,
+and on-screen buttons cover USE, INSPECT, RESTRAIN, SHOW, KNIFE, and chat.
+The menu and lobby are touch-friendly and responsive.
 
 ## Stack
 
