@@ -11,7 +11,7 @@ share link, and friends join straight from their browsers. The flight creator's
 browser acts as the game authority.
 
 ▶ **Play now (no download):**
-https://rawcdn.githack.com/swendsenmichael5-lgtm/PLANEY/149f0b783dfcccc1345a24113d28cf59acb2bcd8/public/index.html
+https://rawcdn.githack.com/swendsenmichael5-lgtm/PLANEY/9c1b0048f56edba86f7329ead1e407cff5858fcf/public/index.html
 
 (That link pins to a specific commit — after pushing changes, regenerate it by
 swapping in the new commit SHA. Alternative mirror:
